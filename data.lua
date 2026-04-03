@@ -1,18 +1,23 @@
 -- InsectLimit Mod - Dedicated Server Compatible
+-- Version: 1.4 (Strict Population Cap + Controlled Expansion + Clump Control)
+
 local package = ...
 
 function package:init()
-	print("[InsectLimit] Initializing addon logic...")
+	print("[InsectLimit] Initializing adjusted swarm logic...")
 
 	local c_bug_spawn = data.components.c_bug_spawn
 	local c_bug_spawner_large = data.components.c_bug_spawner_large
+	local c_bug_harvest = data.components.c_bug_harvest
 
-	if not c_bug_spawn or not c_bug_spawner_large then
-		print("[InsectLimit] ERROR: Bug components not found in data.components!")
+	if not c_bug_spawn or not c_bug_spawner_large or not c_bug_harvest then
+		print("[InsectLimit] ERROR: Essential bug components not found!")
 		return
 	end
 
-	-- 1. 修改基础虫群生成器
+	---------------------------------------------------------------------------
+	-- 1. 修改基础生成器逻辑 (c_bug_spawn)
+	---------------------------------------------------------------------------
 	c_bug_spawn.on_trigger_action = function (self, comp, other_entity, force)
 		local owner_faction = comp.faction
 		if owner_faction.is_player_controlled then return end
@@ -80,8 +85,8 @@ function package:init()
 			local level = math.ceil(player_level * ramp)
 			local num_bugs = level+1
 			num = math.max(num_bugs, num)
-			-- 【核心修改】单位超过 20000 之前，不缩减生成数量 (原版为 2000)
-			if comp.faction.num_entities > 20000 then num = num // 3 end
+			-- 【优化修改】单位超过 3000 之后缩减波次大小，保护服务器性能 (原版 2000)
+			if comp.faction.num_entities > 3000 then num = num // 3 end
 		else
 			num = math.min((player_level // 3)+1, num)
 		end
@@ -98,6 +103,7 @@ function package:init()
 			if bug_levels[i] > 0 then
 				for j=1,bug_levels[i] do
 					rewards = rewards + (i * 3)
+					num_bugs = num_bugs + 1
 					local bug_delay = (((spawn_delay % 15) + ((math.random(1, num_waves)-1)*30))*3)+1
 					if bug_delay < 5 then bug_delay = 1 end
 					Map.Delay("SpawnFromHive", bug_delay, {
@@ -128,7 +134,9 @@ function package:init()
 		end
 	end
 
-	-- 2. 修改大型生成器
+	---------------------------------------------------------------------------
+	-- 2. 修改大型生成器逻辑 (c_bug_spawner_large)
+	---------------------------------------------------------------------------
 	c_bug_spawner_large.on_update = function(self, comp, cause)
 		if comp.faction.is_player_controlled then return end
 
@@ -138,7 +146,7 @@ function package:init()
 		if peaceful == 1 then return comp:SetStateSleep(20000) end
 		if peaceful ~= 3 and not settings.creep then return comp:SetStateSleep(10000) end
 
-		-- 【核心修改】最大单位上限提升至 30000 (原版为 4000)
+		-- 【核心修改】单位绝对上限保持 30000
 		if bugs_faction.num_entities > 30000 then return comp:SetStateSleep(1000) end
 
 		local extra_data = comp.extra_data
@@ -180,8 +188,8 @@ function package:init()
 				end
 
 				if closest_faction then
-					-- 【核心修改】扩张/建立新巢穴的阈值提升至 20000 (原版为 2000)
-					if ((peaceful == 2 and closest_distance > 20) or (closest_distance > 150)) and (bugs_faction.num_entities < 20000) then
+					-- 【扩张修改】筑巢扩张红线设为 10000 (原版 2000)
+					if ((peaceful == 2 and closest_distance > 20) or (closest_distance > 150)) and (bugs_faction.num_entities < 10000) then
 						local rnd_scout = math.random()
 						if rnd_scout > 0.6 then
 							Map.Defer(function()
@@ -219,5 +227,94 @@ function package:init()
 		return comp:SetStateSleep(math.random(300,600))
 	end
 
-	print("[InsectLimit] Logic override successful. Swarm limit set to 30000, falloff at 20000.")
+	---------------------------------------------------------------------------
+	-- 3. 修改筑巢 AI (c_bug_harvest)：支持大面积稀疏分布
+	---------------------------------------------------------------------------
+	c_bug_harvest.on_update = function(self, comp, cause)
+		local owner = comp.owner
+		local data = comp.extra_data
+		local target = data.target
+		local home = data.home
+
+		if target and not target.exists then
+			data.state = "wander"
+			data.target = nil
+			return comp:SetStateSleep(1)
+		end
+		if owner.is_moving then return comp:SetStateSleep(5) end
+
+		local state = data.state or "idle"
+		if not target and state ~= "idle" and state ~= "wander" then
+			data.state = "wander"
+			return
+		end
+
+		if state == "idle" then
+			if home and home.exists then
+				target = Map.FindClosestEntity(owner, 8, function(e)
+					if IsResource(e) and GetResourceHarvestItemId(e) == "silica" and e:GetRangeTo(home) > 20 then return true end
+					return false
+				end, FF_RESOURCE)
+			else
+				Map.Defer(function() if owner.exists then owner:Destroy() end end)
+				return comp:SetStateSleep(1)
+			end
+			if target then
+				data.target = target
+				data.state = "deploy"
+			else
+				data.state = "wander"
+				data.wandertimes = (data.wandertimes or 1) + 1
+				if data.wandertimes > 50 then
+					Map.Defer(function() owner:Destroy() end)
+					return comp:SetStateSleep(1)
+				end
+			end
+		elseif state == "deploy" then
+			if not owner.state_path_blocked then
+				if comp:RequestStateMove(target, 3) then return end
+			end
+
+			data.target = nil
+
+			-- 【智能间距优化】允许 25 格内有 2 个邻居（共3个虫巢）
+			local hive_count = 0
+			for _, e in ipairs(Map.GetEntitiesInRange(owner, 25, FF_OPERATING)) do
+				if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then
+					hive_count = hive_count + 1
+				end
+			end
+
+			if hive_count >= 3 then
+				data.state = "wander"
+				return comp:SetStateSleep(10)
+			end
+
+			Map.Defer(function()
+				if comp.exists then
+					local newhome = Map.CreateEntity(GetBugsFaction(), (math.random() > 0.8) and "f_bug_hive" or "f_bug_hive_large")
+					newhome:Place(owner.location)
+					comp.extra_data.extra_spawned = 0
+					owner:Destroy()
+				end
+			end)
+			return comp:SetStateSleep(10)
+		elseif state == "wander" then
+			local loc = owner.location
+			if data.towards then
+				local tloc = data.towards
+				local dx = math.min(math.max((tloc.x - loc.x) // 3, -50), 50)
+				local dy = math.min(math.max((tloc.y - loc.y) // 3, -50), 50)
+				loc.x = loc.x + dx + math.random(-5, 5)
+				loc.y = loc.y + dy + math.random(-5, 5)
+			else
+				loc.x = loc.x + math.random(-15, 15)
+				loc.y = loc.y + math.random(-15, 15)
+			end
+			data.state = "idle"
+			return comp:RequestStateMove(loc, 1)
+		end
+	end
+
+	print("[InsectLimit] Logic override successful. Cap: 30000, Expansion: 10000, Throttle: 3000.")
 end
