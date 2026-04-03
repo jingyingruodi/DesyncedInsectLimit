@@ -1,5 +1,5 @@
 -- InsectLimit Mod - Dedicated Server Compatible
--- Version: 1.4 (Strict Population Cap + Controlled Expansion + Clump Control)
+-- Version: 1.4.1 (Bugfix: Fixed nil arithmetic error on num_bugs)
 
 local package = ...
 
@@ -83,9 +83,9 @@ function package:init()
 		if force and settings.peaceful == 3 then
 			local ramp = 0.4
 			local level = math.ceil(player_level * ramp)
-			local num_bugs = level+1
-			num = math.max(num_bugs, num)
-			-- 【优化修改】单位超过 3000 之后缩减波次大小，保护服务器性能 (原版 2000)
+			local num_bugs_limit = level+1
+			num = math.max(num_bugs_limit, num)
+			-- 【优化修改】单位超过 3000 之后缩减波次大小 (原版 2000)
 			if comp.faction.num_entities > 3000 then num = num // 3 end
 		else
 			num = math.min((player_level // 3)+1, num)
@@ -98,6 +98,7 @@ function package:init()
 		for i=1,#bug_levels do allbugs = allbugs + bug_levels[i] end
 		local num_waves = (allbugs // 30)+1
 		local target = other_entity.location
+		local num_bugs = 0 -- 【修复】初始化局部变量，防止 nil 算术错误
 
 		for i=#bug_levels,1,-1 do
 			if bug_levels[i] > 0 then
@@ -146,7 +147,7 @@ function package:init()
 		if peaceful == 1 then return comp:SetStateSleep(20000) end
 		if peaceful ~= 3 and not settings.creep then return comp:SetStateSleep(10000) end
 
-		-- 【核心修改】单位绝对上限保持 30000
+		-- 【核心修改】单位绝对上限 30000
 		if bugs_faction.num_entities > 30000 then return comp:SetStateSleep(1000) end
 
 		local extra_data = comp.extra_data
@@ -180,8 +181,8 @@ function package:init()
 						local test_entity = faction.entities[math.random(1, #faction.entities)]
 						local newdist = owner:GetRangeTo(test_entity)
 						if newdist < closest_distance then
-							closest_faction = faction
 							closest_distance = newdist
+							closest_faction = faction
 							towards = test_entity
 						end
 					end
@@ -228,7 +229,7 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 3. 修改筑巢 AI (c_bug_harvest)：支持大面积稀疏分布
+	-- 3. 修改筑巢 AI (c_bug_harvest)
 	---------------------------------------------------------------------------
 	c_bug_harvest.on_update = function(self, comp, cause)
 		local owner = comp.owner
@@ -277,7 +278,6 @@ function package:init()
 
 			data.target = nil
 
-			-- 【智能间距优化】允许 25 格内有 2 个邻居（共3个虫巢）
 			local hive_count = 0
 			for _, e in ipairs(Map.GetEntitiesInRange(owner, 25, FF_OPERATING)) do
 				if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then
