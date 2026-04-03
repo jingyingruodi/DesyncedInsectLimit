@@ -3,6 +3,7 @@
 	"name": "虫群单位上限修改 (Insect Limit)",
 	"author": "镜影若滴",
 	"version_name": "1.0",
+    "client_can_download": true,
 	"version_code": 1,
 	"description": "提升虫群单位数量上限（从4000到30000），并提高生成衰减阈值（20000）。",
 	"packages": {
