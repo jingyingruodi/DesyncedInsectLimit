@@ -1,25 +1,35 @@
 -- InsectLimit Mod - Dedicated Server Compatible
--- Version: 1.6 (Strict Population Cap + Wide Swarm Expansion + Clump Control)
+-- Version: 1.7.4 (Fix: Smart clump control radius adjusted to 35)
 
 local package = ...
 
 function package:init()
-	print("[InsectLimit] Initializing advanced swarm logic...")
+	print("[InsectLimit] Initializing full-fidelity logic override with clump optimization...")
 
 	local c_bug_spawn = data.components.c_bug_spawn
 	local c_bug_spawner_large = data.components.c_bug_spawner_large
 	local c_bug_harvest = data.components.c_bug_harvest
 
 	if not c_bug_spawn or not c_bug_spawner_large or not c_bug_harvest then
-		print("[InsectLimit] ERROR: Essential bug components not found!")
+		print("[InsectLimit] ERROR: Bug components not found!")
 		return
+	end
+
+	-- 辅助函数：检查一个派系是否真的有“可被攻击”的实体（排除纯建筑蓝图）
+	local function FactionHasAttackableEntities(faction)
+		if faction.num_entities <= 0 then return false end
+		for _, e in ipairs(faction.entities) do
+			if e.exists and not e.is_construction then
+				return true
+			end
+		end
+		return false
 	end
 
 	---------------------------------------------------------------------------
 	-- 1. 修改基础生成器逻辑 (c_bug_spawn)
 	---------------------------------------------------------------------------
 	c_bug_spawn.on_trigger_action = function (self, comp, other_entity, force)
-		-- 恢复原版：销毁非法获得的玩家控制虫巢
 		local owner_faction = comp.faction
 		if owner_faction.is_player_controlled then
 			Map.Defer(function() if comp.exists then comp:Destroy() end end)
@@ -34,7 +44,7 @@ function package:init()
 			end, FF_OPERATING)
 		end
 
-		if not other_entity.faction.is_player_controlled or owner_faction:GetTrust(other_entity) ~= "ENEMY" or other_entity.stealth then
+		if not other_entity.faction.is_player_controlled or owner_faction:GetTrust(other_entity) ~= "ENEMY" or other_entity.stealth or other_entity.is_construction then
 			return
 		end
 
@@ -79,7 +89,6 @@ function package:init()
 		max_num = math.min(max_num, owner.def.slots and owner.def.slots.bughole) or 1
 		local num = math.random(math.ceil(max_num / 3), max_num)
 
-		-- 【恢复原版机制】距离与高度影响的难度计算逻辑
 		local loc = owner.location
 		local other_faction = other_entity.faction
 		local other_home =  other_faction.home_location
@@ -107,7 +116,7 @@ function package:init()
 			local level = math.ceil(player_level * ramp)
 			local num_bugs_limit = level+1
 			num = math.max(num_bugs_limit, num)
-			-- 【核心修改】单位超过 4000 之后缩减波次大小，保护服务器性能 (原版 2000)
+			-- 生成缩减阈值：4000
 			if comp.faction.num_entities > 4000 then num = num // 3 end
 		else
 			num = math.min((player_level // 3)+1, num)
@@ -163,7 +172,6 @@ function package:init()
 	-- 2. 修改大型生成器逻辑 (c_bug_spawner_large)
 	---------------------------------------------------------------------------
 	c_bug_spawner_large.on_update = function(self, comp, cause)
-		-- 恢复原版：销毁非法获得的玩家控制大虫巢
 		if comp.faction.is_player_controlled then
 			Map.Defer(function() if comp.exists then comp:Destroy() end end)
 			return
@@ -175,7 +183,7 @@ function package:init()
 		if peaceful == 1 then return comp:SetStateSleep(20000) end
 		if peaceful ~= 3 and not settings.creep then return comp:SetStateSleep(10000) end
 
-		-- 【核心修改】单位上限 30000
+		-- 绝对上限：30000
 		if bugs_faction.num_entities > 30000 then return comp:SetStateSleep(1000) end
 
 		local extra_data = comp.extra_data
@@ -205,19 +213,29 @@ function package:init()
 			elseif rnd > 0.3 then
 				local closest_distance, closest_faction, towards = 9999999
 				for _, faction in ipairs(Map.GetFactions()) do
-					if faction.is_player_controlled and faction.num_entities > 0 and bugs_faction:GetTrust(faction) == "ENEMY" then
-						local test_entity = faction.entities[math.random(1, #faction.entities)]
-						local newdist = owner:GetRangeTo(test_entity)
-						if newdist < closest_distance then
-							closest_faction = faction
-							closest_distance = newdist
-							towards = test_entity
+					if faction.is_player_controlled and FactionHasAttackableEntities(faction) and bugs_faction:GetTrust(faction) == "ENEMY" then
+						local newdist = 9999998
+						local valid_targets = {}
+						for _, ent in ipairs(faction.entities) do
+							if ent.exists and not ent.is_construction then
+								table.insert(valid_targets, ent)
+							end
+						end
+
+						if #valid_targets > 0 then
+							local test_entity = valid_targets[math.random(1, #valid_targets)]
+							newdist = owner:GetRangeTo(test_entity)
+							if newdist < closest_distance then
+								closest_faction = faction
+								closest_distance = newdist
+								towards = test_entity
+							end
 						end
 					end
 				end
 
 				if closest_faction then
-					-- 【保留修改】扩张红线 10000
+					-- 扩张限制：10000
 					if ((peaceful == 2 and closest_distance > 20) or (closest_distance > 150)) and (bugs_faction.num_entities < 10000) then
 						local rnd_scout = math.random()
 						if rnd_scout > 0.6 then
@@ -236,12 +254,15 @@ function package:init()
 						return comp:SetStateSleep(math.random(4000,8000))
 					elseif peaceful == 3 or (closest_distance <= 60) then
 						local ent = closest_faction.home_entity
-						if not ent then
+						if not ent or ent.is_construction then
 							for _,e in ipairs(closest_faction.entities) do
-								if e.exists and e.is_placed then ent = e break end
+								if e.exists and e.is_placed and not e.is_construction then
+									ent = e
+									break
+								end
 							end
 						end
-						if ent then
+						if ent and not ent.is_construction then
 							Map.Defer(function()
 								if comp.exists and ent.exists then
 									self:on_trigger_action(comp, ent, true)
@@ -257,26 +278,101 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 3. 修改筑巢 AI (c_bug_harvest)：增加智能间距
+	-- 3. 修改筑巢 AI (c_bug_harvest)：使用静态坐标 + 调整后的 35 格检测半径
 	---------------------------------------------------------------------------
-	local old_harvest_update = c_bug_harvest.on_update
 	c_bug_harvest.on_update = function(self, comp, cause)
 		local owner = comp.owner
 		local data = comp.extra_data
-		if data.state == "deploy" and not owner.is_moving then
+		local target = data.target
+		local home = data.home
+
+		-- 初始有效性检查
+		if not home or not home.exists or not home.is_placed then
+			Map.Defer(function() if owner.exists then owner:Destroy() end end)
+			return comp:SetStateSleep(1)
+		end
+
+		local home_loc = home.location
+
+		if target and not target.exists then
+			data.state = "wander"
+			data.target = nil
+			return comp:SetStateSleep(1)
+		end
+		if owner.is_moving then return comp:SetStateSleep(5) end
+
+		local state = data.state or "idle"
+		if not target and state ~= "idle" and state ~= "wander" then
+			data.state = "wander"
+			return
+		end
+
+		if state == "idle" then
+			target = Map.FindClosestEntity(owner, 8, function(e)
+				if home and home.exists and home.is_placed then
+					if IsResource(e) and GetResourceHarvestItemId(e) == "silica" and e:GetRangeTo(home_loc) > 20 then
+						return true
+					end
+				end
+				return false
+			end, FF_RESOURCE)
+
+			if target then
+				data.target = target
+				data.state = "deploy"
+			else
+				data.state = "wander"
+				data.wandertimes = (data.wandertimes or 1) + 1
+				if data.wandertimes > 50 then
+					Map.Defer(function() owner:Destroy() end)
+					return comp:SetStateSleep(1)
+				end
+			end
+		elseif state == "deploy" then
+			if not owner.state_path_blocked then
+				if comp:RequestStateMove(target, 3) then return end
+			end
+
+			data.target = nil
+
+			-- 【微调】聚落限额优化：改用 35 格半径，允许 3 个巢穴
 			local hive_count = 0
-			for _, e in ipairs(Map.GetEntitiesInRange(owner, 25, FF_OPERATING)) do
+			for _, e in ipairs(Map.GetEntitiesInRange(owner, 35, FF_OPERATING)) do
 				if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then
 					hive_count = hive_count + 1
 				end
 			end
+
 			if hive_count >= 3 then
 				data.state = "wander"
 				return comp:SetStateSleep(10)
 			end
+
+			Map.Defer(function()
+				if comp.exists then
+					local newhome = Map.CreateEntity(GetBugsFaction(), (math.random() > 0.8) and "f_bug_hive" or "f_bug_hive_large")
+					newhome:Place(owner.location)
+					comp.extra_data.extra_spawned = 0
+					owner:Destroy()
+				end
+			end)
+			return comp:SetStateSleep(10)
+		elseif state == "wander" then
+			local loc = owner.location
+			if data.towards then
+				local tloc = data.towards
+				local dx = math.min(math.max((tloc.x - loc.x) // 3, -50), 50)
+				local dy = math.min(math.max((tloc.y - loc.y) // 3, -50), 50)
+				loc.x = loc.x + dx + math.random(-5, 5)
+				loc.y = loc.y + dy + math.random(-5, 5)
+			else
+				loc.x = loc.x + math.random(-15, 15)
+				loc.y = loc.y + math.random(-15, 15)
+			end
+			data.state = "idle"
+			return comp:RequestStateMove(loc, 1)
 		end
-		return old_harvest_update(self, comp, cause)
 	end
 
-	print("[InsectLimit] Logic override complete. Version 1.6: Throttle set to 4000.")
+	print("[InsectLimit] Logic override successful. Cap: 30000, Clump Protection: 35 tiles.")
 end
