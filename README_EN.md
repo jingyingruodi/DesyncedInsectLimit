@@ -9,7 +9,7 @@ While this is sufficient for single-player mode, in multiplayer servers where mu
 ## ✨ Features
 By precision-overriding the bug spawner and expansion AI logic, this mod significantly increases multiplayer capacity while maintaining vanilla difficulty balance:
 - **Absolute Cap Increase**: Raised the maximum unit count from **4,000** to **30,000**, ensuring everyone has something to fight even with many players.
-- **Spawn Wave Optimization**: Optimized the threshold where spawn amounts begin to decrease from **2,000** to **3,000**, balancing performance and intensity.
+- **Spawn Wave Optimization**: Optimized the threshold where spawn amounts begin to decrease from **2,000** to **4,000**, balancing performance and intensity.
 - **Expansion Range Relaxation**: Increased the threshold for scouts establishing new hives to **10,000**, allowing the swarm to distribute across a much larger portion of the map.
 - **Smart Anti-Clumping AI**: Introduced a settlement quota control (maximum 3 hives within a 25-tile radius) to prevent scouts from nesting too densely in one spot, which could lead to performance issues.
 - **Server Compatibility**: Pure logic modification with no UI components. Fully supports Dedicated Servers and automatic synchronization.
