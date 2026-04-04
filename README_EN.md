@@ -12,9 +12,7 @@ By precision-overriding the bug spawner and expansion AI logic, this mod signifi
 - **Spawn Wave Optimization**: Optimized the threshold where spawn amounts begin to decrease from **2,000** to **4,000**, balancing performance and intensity.
 - **Expansion Range Relaxation**: Increased the threshold for scouts establishing new hives to **10,000**, allowing the swarm to distribute across a much larger portion of the map.
 - **Smart Anti-Clumping AI**: Introduced a settlement quota control (maximum 3 hives within a 35-tile radius) to prevent scouts from nesting too densely in one spot, which could lead to performance issues.
-- **Vanilla Fidelity**: Fully preserved and restored core mechanics such as distance-based difficulty scaling, plateau/blight detection, and visual effects.
 - **Vanilla Bugfix**: Fixed a notorious original bug where the swarm would lock onto and infinitely siege "Construction Blueprints", leading to massive unit pile-ups.
-- **Ultimate Robustness Optimization**: Specially optimized for large-scale combat by using coordinate-snapshot techniques to fix AI script crashes when hives are destroyed.
 - **Server Compatibility**: Pure logic modification with no UI components. Fully supports Dedicated Servers and automatic synchronization.
 
 ## 🛠 Installation
