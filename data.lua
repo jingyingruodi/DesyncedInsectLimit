@@ -1,21 +1,39 @@
 -- InsectLimit Mod - Dedicated Server Compatible
--- Version: 1.7.4 (Fix: Smart clump control radius adjusted to 35)
+-- Version: 1.7.6 (Fix: Added missing c_trilobyte_attack infection logic)
 
 local package = ...
 
 function package:init()
-	print("[InsectLimit] Initializing full-fidelity logic override with clump optimization...")
+	print("[InsectLimit] Initializing full fidelity bug logic...")
 
 	local c_bug_spawn = data.components.c_bug_spawn
 	local c_bug_spawner_large = data.components.c_bug_spawner_large
 	local c_bug_harvest = data.components.c_bug_harvest
+	local c_trilobyte_attack = data.components.c_trilobyte_attack
 
-	if not c_bug_spawn or not c_bug_spawner_large or not c_bug_harvest then
+	if not c_bug_spawn or not c_bug_spawner_large or not c_bug_harvest or not c_trilobyte_attack then
 		print("[InsectLimit] ERROR: Bug components not found!")
 		return
 	end
 
-	-- 辅助函数：检查一个派系是否真的有“可被攻击”的实体（排除纯建筑蓝图）
+	-- 辅助函数：还原原版季节活跃度判断
+	local function IsBugActiveSeason()
+		return math.abs(Map.GetYearSeason() - 0.5) < 0.25
+	end
+
+	-- 辅助函数：仅统计非建筑移动单位
+	local function GetMobileBugCount()
+		local bugs_faction = GetBugsFaction()
+		local count = 0
+		for _, e in ipairs(bugs_faction.entities) do
+			if e.exists and not e.is_construction and e.has_movement then
+				count = count + 1
+			end
+		end
+		return count
+	end
+
+	-- 辅助函数：检查一个派系是否真的有“可被攻击”的实体
 	local function FactionHasAttackableEntities(faction)
 		if faction.num_entities <= 0 then return false end
 		for _, e in ipairs(faction.entities) do
@@ -29,6 +47,14 @@ function package:init()
 	---------------------------------------------------------------------------
 	-- 1. 修改基础生成器逻辑 (c_bug_spawn)
 	---------------------------------------------------------------------------
+	c_bug_spawn.on_trigger = function (self, comp, other_entity, force)
+		if other_entity.faction.is_player_controlled then
+			if force or IsBugActiveSeason() then
+				self:on_trigger_action(comp, other_entity, force)
+			end
+		end
+	end
+
 	c_bug_spawn.on_trigger_action = function (self, comp, other_entity, force)
 		local owner_faction = comp.faction
 		if owner_faction.is_player_controlled then
@@ -116,8 +142,7 @@ function package:init()
 			local level = math.ceil(player_level * ramp)
 			local num_bugs_limit = level+1
 			num = math.max(num_bugs_limit, num)
-			-- 生成缩减阈值：4000
-			if comp.faction.num_entities > 4000 then num = num // 3 end
+			if GetMobileBugCount() > 4000 then num = num // 3 end
 		else
 			num = math.min((player_level // 3)+1, num)
 		end
@@ -183,8 +208,8 @@ function package:init()
 		if peaceful == 1 then return comp:SetStateSleep(20000) end
 		if peaceful ~= 3 and not settings.creep then return comp:SetStateSleep(10000) end
 
-		-- 绝对上限：30000
-		if bugs_faction.num_entities > 30000 then return comp:SetStateSleep(1000) end
+		local mobile_count = GetMobileBugCount()
+		if mobile_count > 30000 then return comp:SetStateSleep(1000) end
 
 		local extra_data = comp.extra_data
 		if not extra_data.extra_spawned then extra_data.extra_spawned = 0 end
@@ -211,6 +236,10 @@ function package:init()
 					end)
 				end
 			elseif rnd > 0.3 then
+				if not IsBugActiveSeason() and math.random() > 0.2 then
+					return comp:SetStateSleep(math.random(1000, 2000))
+				end
+
 				local closest_distance, closest_faction, towards = 9999999
 				for _, faction in ipairs(Map.GetFactions()) do
 					if faction.is_player_controlled and FactionHasAttackableEntities(faction) and bugs_faction:GetTrust(faction) == "ENEMY" then
@@ -235,8 +264,7 @@ function package:init()
 				end
 
 				if closest_faction then
-					-- 扩张限制：10000
-					if ((peaceful == 2 and closest_distance > 20) or (closest_distance > 150)) and (bugs_faction.num_entities < 10000) then
+					if ((peaceful == 2 and closest_distance > 20) or (closest_distance > 150)) and (mobile_count < 10000) then
 						local rnd_scout = math.random()
 						if rnd_scout > 0.6 then
 							Map.Defer(function()
@@ -245,7 +273,7 @@ function package:init()
 								scout:Place(owner)
 								local harvest_comp = scout:FindComponent("c_bug_harvest")
 								harvest_comp.extra_data.home = owner
-								if rnd_scout > 0.7 or bugs_faction.num_entities > 500 then
+								if rnd_scout > 0.7 or mobile_count > 500 then
 									harvest_comp.extra_data.towards = towards and towards.location or closest_faction.home_location
 								end
 							end)
@@ -278,7 +306,7 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 3. 修改筑巢 AI (c_bug_harvest)：使用静态坐标 + 调整后的 35 格检测半径
+	-- 3. 修改筑巢 AI (c_bug_harvest)
 	---------------------------------------------------------------------------
 	c_bug_harvest.on_update = function(self, comp, cause)
 		local owner = comp.owner
@@ -286,14 +314,12 @@ function package:init()
 		local target = data.target
 		local home = data.home
 
-		-- 初始有效性检查
 		if not home or not home.exists or not home.is_placed then
 			Map.Defer(function() if owner.exists then owner:Destroy() end end)
 			return comp:SetStateSleep(1)
 		end
 
 		local home_loc = home.location
-
 		if target and not target.exists then
 			data.state = "wander"
 			data.target = nil
@@ -334,8 +360,6 @@ function package:init()
 			end
 
 			data.target = nil
-
-			-- 【微调】聚落限额优化：改用 35 格半径，允许 3 个巢穴
 			local hive_count = 0
 			for _, e in ipairs(Map.GetEntitiesInRange(owner, 35, FF_OPERATING)) do
 				if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then
@@ -374,5 +398,44 @@ function package:init()
 		end
 	end
 
-	print("[InsectLimit] Logic override successful. Cap: 30000, Clump Protection: 35 tiles.")
+	---------------------------------------------------------------------------
+	-- 4. 补全：修改虫群攻击逻辑 (c_trilobyte_attack) - 还原病毒感染/卡死回收逻辑
+	---------------------------------------------------------------------------
+	c_trilobyte_attack.on_update = function(self, comp, cause)
+		if not comp.faction.is_player_controlled then
+			-- state_custom_1 表示被感染，failed_move 检查是否被地形卡住
+			local failed_move = cause & CC_FINISH_MOVE ~= 0 and comp.owner.state_path_blocked
+			if failed_move or comp.owner.state_custom_1 then
+				local ed = comp.extra_data
+				if not ed.failed_move then
+					ed.failed_move = Map.GetTick() + 900 -- 约 15 秒观察期
+				else
+					if ed.failed_move < Map.GetTick() then
+						comp:SetRegister(1) -- 停止当前攻击指令
+						local homeless = comp.owner:FindComponent("c_bug_homeless")
+						if not homeless then
+							ed.failed_move = nil
+							Map.Defer(function()
+								if not comp.exists then return end
+								-- 原版机制：血量 <= 200 的小虫子直接“化脓”销毁；高级大虫子尝试重新筑巢
+								local new_homeless = (comp.owner.health > 200) and comp.owner:AddComponent("c_bug_homeless")
+								if new_homeless then
+									new_homeless:Activate()
+								else
+									comp.owner:Destroy()
+								end
+							end)
+						else
+							homeless:Activate()
+						end
+						return
+					end
+				end
+			end
+		end
+		-- 回调基础防御塔逻辑进行攻击
+		return data.components.c_turret:on_update(comp, cause)
+	end
+
+	print("[InsectLimit] Logic override successful. Mobile Cap: 30000, infection cleanup restored.")
 end
