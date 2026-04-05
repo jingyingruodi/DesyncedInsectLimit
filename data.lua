@@ -1,10 +1,10 @@
 -- InsectLimit Mod - Dedicated Server Compatible
--- Version: 1.7.6 (Fix: Added missing c_trilobyte_attack infection logic)
+-- Version: 1.7.7 (Enhanced: Large Hive expansion, Difficulty-scaled thresholds, Full fidelity logic)
 
 local package = ...
 
 function package:init()
-	print("[InsectLimit] Initializing full fidelity bug logic...")
+	print("[InsectLimit] Initializing comprehensive bug logic override...")
 
 	local c_bug_spawn = data.components.c_bug_spawn
 	local c_bug_spawner_large = data.components.c_bug_spawner_large
@@ -131,6 +131,7 @@ function package:init()
 		if tile_h < plateau_level then dist = 0 end
 
 		local player_level = GetPlayerFactionLevel(other_faction)
+		local difficulty = settings.difficulty or 1.0
 
 		if dist > 30000 then player_level = player_level + 5
 		elseif dist > 90000 then player_level = player_level + 10
@@ -142,7 +143,8 @@ function package:init()
 			local level = math.ceil(player_level * ramp)
 			local num_bugs_limit = level+1
 			num = math.max(num_bugs_limit, num)
-			if GetMobileBugCount() > 4000 then num = num // 3 end
+			-- 生成缩减阈值随难度缩放
+			if GetMobileBugCount() > (4000 * difficulty) then num = num // 3 end
 		else
 			num = math.min((player_level // 3)+1, num)
 		end
@@ -179,7 +181,8 @@ function package:init()
 		extra_data.spawned = map_tick
 		extra_data.lvl = ed_lvl + 1
 
-		if comp.owner.id == "f_bug_hive" and ed_extra_spawned < 8 and math.random() <= 0.05 then
+		-- 【补全】大虫巢也具备自增殖能力
+		if (comp.owner.id == "f_bug_hive" or comp.owner.id == "f_bug_hive_large") and ed_extra_spawned < 8 and math.random() <= 0.05 then
 			local x, y = owner.location.x, owner.location.y
 			local newbughole = Map.CreateEntity(owner_faction, "f_bug_hole")
 			newbughole:Place(math.random(x-4, x+4), math.random(y-4, y+4))
@@ -264,7 +267,9 @@ function package:init()
 				end
 
 				if closest_faction then
-					if ((peaceful == 2 and closest_distance > 20) or (closest_distance > 150)) and (mobile_count < 10000) then
+					-- 扩张阈值随难度缩放
+					local difficulty = settings.difficulty or 1.0
+					if ((peaceful == 2 and closest_distance > 20) or (closest_distance > 150)) and (mobile_count < (10000 * difficulty)) then
 						local rnd_scout = math.random()
 						if rnd_scout > 0.6 then
 							Map.Defer(function()
@@ -399,25 +404,23 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 4. 补全：修改虫群攻击逻辑 (c_trilobyte_attack) - 还原病毒感染/卡死回收逻辑
+	-- 4. 修改虫群攻击逻辑 (c_trilobyte_attack)
 	---------------------------------------------------------------------------
 	c_trilobyte_attack.on_update = function(self, comp, cause)
 		if not comp.faction.is_player_controlled then
-			-- state_custom_1 表示被感染，failed_move 检查是否被地形卡住
 			local failed_move = cause & CC_FINISH_MOVE ~= 0 and comp.owner.state_path_blocked
 			if failed_move or comp.owner.state_custom_1 then
 				local ed = comp.extra_data
 				if not ed.failed_move then
-					ed.failed_move = Map.GetTick() + 900 -- 约 15 秒观察期
+					ed.failed_move = Map.GetTick() + 900
 				else
 					if ed.failed_move < Map.GetTick() then
-						comp:SetRegister(1) -- 停止当前攻击指令
+						comp:SetRegister(1)
 						local homeless = comp.owner:FindComponent("c_bug_homeless")
 						if not homeless then
 							ed.failed_move = nil
 							Map.Defer(function()
 								if not comp.exists then return end
-								-- 原版机制：血量 <= 200 的小虫子直接“化脓”销毁；高级大虫子尝试重新筑巢
 								local new_homeless = (comp.owner.health > 200) and comp.owner:AddComponent("c_bug_homeless")
 								if new_homeless then
 									new_homeless:Activate()
@@ -433,9 +436,8 @@ function package:init()
 				end
 			end
 		end
-		-- 回调基础防御塔逻辑进行攻击
 		return data.components.c_turret:on_update(comp, cause)
 	end
 
-	print("[InsectLimit] Logic override successful. Mobile Cap: 30000, infection cleanup restored.")
+	print("[InsectLimit] Logic override successful. Enhanced with dynamic difficulty scaling.")
 end
