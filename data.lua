@@ -1,10 +1,10 @@
 -- InsectLimit Mod - Dedicated Server Compatible
--- Version: 1.7.7 (Enhanced: Large Hive expansion, Difficulty-scaled thresholds, Full fidelity logic)
+-- Version: 1.7.8 (Critical Fix: Restore unit melee range by fixing Lua method call)
 
 local package = ...
 
 function package:init()
-	print("[InsectLimit] Initializing comprehensive bug logic override...")
+	print("[InsectLimit] Initializing full fidelity bug logic...")
 
 	local c_bug_spawn = data.components.c_bug_spawn
 	local c_bug_spawner_large = data.components.c_bug_spawner_large
@@ -143,7 +143,6 @@ function package:init()
 			local level = math.ceil(player_level * ramp)
 			local num_bugs_limit = level+1
 			num = math.max(num_bugs_limit, num)
-			-- 生成缩减阈值随难度缩放
 			if GetMobileBugCount() > (4000 * difficulty) then num = num // 3 end
 		else
 			num = math.min((player_level // 3)+1, num)
@@ -181,7 +180,6 @@ function package:init()
 		extra_data.spawned = map_tick
 		extra_data.lvl = ed_lvl + 1
 
-		-- 【补全】大虫巢也具备自增殖能力
 		if (comp.owner.id == "f_bug_hive" or comp.owner.id == "f_bug_hive_large") and ed_extra_spawned < 8 and math.random() <= 0.05 then
 			local x, y = owner.location.x, owner.location.y
 			local newbughole = Map.CreateEntity(owner_faction, "f_bug_hole")
@@ -267,7 +265,6 @@ function package:init()
 				end
 
 				if closest_faction then
-					-- 扩张阈值随难度缩放
 					local difficulty = settings.difficulty or 1.0
 					if ((peaceful == 2 and closest_distance > 20) or (closest_distance > 150)) and (mobile_count < (10000 * difficulty)) then
 						local rnd_scout = math.random()
@@ -436,8 +433,10 @@ function package:init()
 				end
 			end
 		end
-		return data.components.c_turret:on_update(comp, cause)
+		-- 【修复】使用静态调用，确保 self 指向虫子组件定义而不是防御塔定义
+		-- 这样虫子的 attack_radius (1) 就会生效，而不是错误地使用防御塔的 (7)
+		return data.components.c_turret.on_update(self, comp, cause)
 	end
 
-	print("[InsectLimit] Logic override successful. Enhanced with dynamic difficulty scaling.")
+	print("[InsectLimit] Logic override successful. Critical melee range fix applied.")
 end
