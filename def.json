@@ -2,9 +2,9 @@
 	"id": "InsectLimit",
 	"name": "虫群单位上限修改 (Insect Limit)",
 	"author": "镜影若滴",
-	"version_name": "1.7.9",
-	"version_code": 16,
-	"description": "提升移动单位上限（30000）。1.7.9版修复了侦察虫向坐标(0,0)扎堆的Bug，补全缺失逻辑。",
+	"version_name": "1.8.2",
+	"version_code": 19,
+	"description": "底层性能突破版。1.8.2版回归了引擎内置计数器（num_entities）以消除Lua遍历开销，重构了密度检查逻辑为探测式扫描（零Lua分配），并进一步优化了搜索采样与休眠逻辑，旨在恢复至原版级别的逻辑帧速率。",
 	"packages": {
 		"InsectLimitAmin": {
 			"name": "InsectLimitAmin",

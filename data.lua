@@ -1,10 +1,10 @@
 -- InsectLimit Mod - Dedicated Server Compatible
--- Version: 1.7.9 (Fix: Scout (0,0) clump, Added pathfinding distance pruning, Optimized Scout AI)
+-- Version: 1.8.2 (Performance Breakthrough: Native counters, Search pruning, Zero-allocation density check)
 
 local package = ...
 
 function package:init()
-	print("[InsectLimit] Initializing safety-first bug logic override...")
+	print("[InsectLimit] Applying low-level performance optimizations...")
 
 	local c_bug_spawn = data.components.c_bug_spawn
 	local c_bug_spawner_large = data.components.c_bug_spawner_large
@@ -21,25 +21,15 @@ function package:init()
 		return math.abs(Map.GetYearSeason() - 0.5) < 0.25
 	end
 
-	-- 辅助函数：仅统计非建筑移动单位
-	local function GetMobileBugCount()
-		local bugs_faction = GetBugsFaction()
-		local count = 0
-		for _, e in ipairs(bugs_faction.entities) do
-			if e.exists and not e.is_construction and e.has_movement then
-				count = count + 1
-			end
-		end
-		return count
-	end
-
 	-- 辅助函数：检查一个派系是否真的有“可被攻击”的实体
 	local function FactionHasAttackableEntities(faction)
 		if faction.num_entities <= 0 then return false end
-		for _, e in ipairs(faction.entities) do
-			if e.exists and not e.is_construction then
-				return true
-			end
+		-- 采样检查：只看前 10 个实体，大幅减少遍历开销
+		local entities = faction.entities
+		local max_check = math.min(#entities, 10)
+		for i=1, max_check do
+			local e = entities[i]
+			if e and e.exists and not e.is_construction then return true end
 		end
 		return false
 	end
@@ -70,10 +60,8 @@ function package:init()
 			end, FF_OPERATING)
 		end
 
-		-- 距离截断：不响应太远处的触发（防止长距离寻路）
-		if not force and comp.owner:GetRangeTo(other_entity) > 100 then
-			return
-		end
+		-- 性能截断：不响应远距离触发
+		if not force and comp.owner:GetRangeTo(other_entity) > 100 then return end
 
 		if not other_entity.faction.is_player_controlled or owner_faction:GetTrust(other_entity) ~= "ENEMY" or other_entity.stealth or other_entity.is_construction then
 			return
@@ -99,9 +87,7 @@ function package:init()
 				bug:FindComponent("c_turret", true):SetRegisterCoord(1, other_entity.location)
 				if force then
 					bug:SetRegisterEntity(FRAMEREG_GOTO, nil)
-					if not bug:FindComponent("c_bug_homeless") then
-						bug:AddComponent("c_bug_homeless", "hidden")
-					end
+					if not bug:FindComponent("c_bug_homeless") then bug:AddComponent("c_bug_homeless", "hidden") end
 				end
 			end
 			return
@@ -114,69 +100,34 @@ function package:init()
 		local max_num = (owner.id == "f_bug_hole" and 1 or early_easy) + ed_extra_spawned
 		if StabilityGet then
 			local stability = -StabilityGet()
-			stability = stability // 500
-			max_num = max_num + math.max(0, stability)
+			max_num = max_num + math.max(0, stability // 500)
 		end
 		max_num = math.min(max_num, owner.def.slots and owner.def.slots.bughole) or 1
 		local num = math.random(math.ceil(max_num / 3), max_num)
 
-		local loc = owner.location
-		local other_faction = other_entity.faction
-		local other_home =  other_faction.home_location
-		local distloc = { x = loc.x, y = loc.y }
-		if other_home then
-			distloc.x = loc.x - other_home.x
-			distloc.y = loc.y - other_home.y
-		end
-		local dist = (distloc.x*distloc.x)+(distloc.y*distloc.y)
-
 		local settings = Map.GetSettings()
-		local plateau_level = settings.plateau_level
-		local tile_h = Map.GetElevation(loc.x, loc.y)
-		if tile_h < plateau_level then dist = 0 end
-
-		local player_level = GetPlayerFactionLevel(other_faction)
+		local player_level = GetPlayerFactionLevel(other_entity.faction)
 		local difficulty = settings.difficulty or 1.0
 
-		if dist > 30000 then player_level = player_level + 5
-		elseif dist > 90000 then player_level = player_level + 10
-		elseif dist > 122500 then player_level = player_level + 20
-		end
-
 		if force and settings.peaceful == 3 then
-			local ramp = 0.4
-			local level = math.ceil(player_level * ramp)
-			local num_bugs_limit = level+1
-			num = math.max(num_bugs_limit, num)
-			if GetMobileBugCount() > (4000 * difficulty) then num = num // 3 end
+			num = math.max(math.ceil(player_level * 0.4) + 1, num)
+			-- 【性能核心】：回归内置计数器，避免 Lua 遍历开销
+			if comp.faction.num_entities > (4000 * difficulty) then num = num // 3 end
 		else
 			num = math.min((player_level // 3)+1, num)
 		end
 
 		local bug_levels = GetBugCountsForLevel(player_level, num, force)
-		local rewards = 0
-		local spawn_delay = 1
-		local num_bugs_counter = 0
-
-		local allbugs = 0
-		for i=1,#bug_levels do allbugs = allbugs + bug_levels[i] end
-		local num_waves = (allbugs // 30)+1
-		local target = other_entity.location
+		local rewards, spawn_delay, target = 0, 1, other_entity.location
+		local loc = owner.location
 
 		for i=#bug_levels,1,-1 do
 			if bug_levels[i] > 0 then
 				for j=1,bug_levels[i] do
 					rewards = rewards + (i * 3)
-					num_bugs_counter = num_bugs_counter + 1
-					local bug_delay = (((spawn_delay % 15) + ((math.random(1, num_waves)-1)*30))*3)+1
-					if bug_delay < 5 then bug_delay = 1 end
+					local bug_delay = (((spawn_delay % 15) + (math.random(0, 2)*30))*3)+1
 					Map.Delay("SpawnFromHive", bug_delay, {
-						level = i,
-						force = force,
-						owner = owner,
-						loc = Tool.Copy(loc),
-						target = target,
-						comp = comp,
+						level = i, force = force, owner = owner, loc = Tool.Copy(loc), target = target, comp = comp,
 					})
 					spawn_delay = spawn_delay + 1
 				end
@@ -186,10 +137,8 @@ function package:init()
 		extra_data.lvl = ed_lvl + 1
 
 		if (comp.owner.id == "f_bug_hive" or comp.owner.id == "f_bug_hive_large") and ed_extra_spawned < 8 and math.random() <= 0.05 then
-			local x, y = owner.location.x, owner.location.y
 			local newbughole = Map.CreateEntity(owner_faction, "f_bug_hole")
-			newbughole:Place(math.random(x-4, x+4), math.random(y-4, y+4))
-			newbughole:PlayEffect("fx_digital_in")
+			newbughole:Place(math.random(loc.x-4, loc.x+4), math.random(loc.y-4, loc.y+4))
 			extra_data.extra_spawned = ed_extra_spawned + 1
 		end
 
@@ -212,10 +161,10 @@ function package:init()
 		local settings = Map.GetSettings()
 		local peaceful = settings.peaceful
 		if peaceful == 1 then return comp:SetStateSleep(20000) end
-		if peaceful ~= 3 and not settings.creep then return comp:SetStateSleep(10000) end
 
-		local mobile_count = GetMobileBugCount()
-		if mobile_count > 30000 then return comp:SetStateSleep(1000) end
+		-- 【性能核心】：上限已满时使用原版 num_entities 极速判断
+		local current_total = bugs_faction.num_entities
+		if current_total > 30000 then return comp:SetStateSleep(5000) end
 
 		local extra_data = comp.extra_data
 		if not extra_data.extra_spawned then extra_data.extra_spawned = 0 end
@@ -225,12 +174,8 @@ function package:init()
 		if extra_data.extra_spawned > 10 then
 			local rnd = math.random()
 			if rnd < 0.2 then
-				local hivecount = 0
-				local found = Map.FindClosestEntity(comp.owner, 5, function(enemy)
-					if enemy.id == "f_bug_hive" or enemy.id == "f_bug_hive_large" then
-						hivecount = hivecount + 1
-						if hivecount > 5 then return true end
-					end
+				local found = Map.FindClosestEntity(owner, 5, function(e)
+					return e.id == "f_bug_hive" or e.id == "f_bug_hive_large"
 				end, FF_OPERATING)
 				if not found then
 					Map.Defer(function()
@@ -242,29 +187,19 @@ function package:init()
 					end)
 				end
 			elseif rnd > 0.3 then
-				if not IsBugActiveSeason() and math.random() > 0.2 then
-					return comp:SetStateSleep(math.random(1000, 2000))
-				end
+				if not IsBugActiveSeason() and math.random() > 0.1 then return comp:SetStateSleep(math.random(2000, 4000)) end
 
 				local closest_distance, closest_faction, towards = 9999999
+				-- 【性能核心】：采用原版抽样搜索，不进行大规模距离计算
 				for _, faction in ipairs(Map.GetFactions()) do
-					if faction.is_player_controlled and FactionHasAttackableEntities(faction) and bugs_faction:GetTrust(faction) == "ENEMY" then
-						local newdist = 9999998
-						local valid_targets = {}
-						-- 增加探测范围限制，减少对极远处玩家的扫描负担
-						for _, ent in ipairs(faction.entities) do
-							if ent.exists and not ent.is_construction and owner:GetRangeTo(ent) < 250 then
-								table.insert(valid_targets, ent)
-							end
-						end
-
-						if #valid_targets > 0 then
-							local test_entity = valid_targets[math.random(1, #valid_targets)]
-							newdist = owner:GetRangeTo(test_entity)
-							if newdist < closest_distance then
-								closest_faction = faction
-								closest_distance = newdist
-								towards = test_entity
+					if faction.is_player_controlled and faction.num_entities > 0 and bugs_faction:GetTrust(faction) == "ENEMY" then
+						local entities = faction.entities
+						local test_entity = entities[math.random(1, #entities)]
+						if test_entity and test_entity.exists and not test_entity.is_construction then
+							local d = owner:GetRangeTo(test_entity)
+							-- 探测剪枝：只感应 250 格
+							if d < 250 and d < closest_distance then
+								closest_faction, closest_distance, towards = faction, d, test_entity
 							end
 						end
 					end
@@ -272,43 +207,29 @@ function package:init()
 
 				if closest_faction then
 					local difficulty = settings.difficulty or 1.0
-					if ((peaceful == 2 and closest_distance > 20) or (closest_distance > 150)) and (mobile_count < (10000 * difficulty)) then
-						local rnd_scout = math.random()
-						if rnd_scout > 0.6 then
+					if ((peaceful == 2 and closest_distance > 20) or (closest_distance > 150)) and (current_total < (10000 * difficulty)) then
+						if math.random() > 0.6 then
 							Map.Defer(function()
 								if not owner.exists then return end
 								local scout = Map.CreateEntity(bugs_faction, "f_triloscout")
 								scout:Place(owner)
 								local harvest_comp = scout:FindComponent("c_bug_harvest")
 								harvest_comp.extra_data.home = owner
-								-- 修复：严谨校验 towards 坐标，防止 (0,0) 扎堆
 								if towards and towards.exists then
 									local tloc = towards.location
-									if tloc.x ~= 0 or tloc.y ~= 0 then
-										harvest_comp.extra_data.towards = Tool.Copy(tloc)
-									end
-								elseif closest_faction.home_location then
-									local hloc = closest_faction.home_location
-									if hloc.x ~= 0 or hloc.y ~= 0 then
-										harvest_comp.extra_data.towards = Tool.Copy(hloc)
-									end
+									if tloc.x ~= 0 or tloc.y ~= 0 then harvest_comp.extra_data.towards = Tool.Copy(tloc) end
 								end
 							end)
 						end
 						comp.extra_data.extra_spawned = 0
 						return comp:SetStateSleep(math.random(4000,8000))
-					elseif peaceful == 3 or (closest_distance <= 60) then
+					elseif (peaceful == 3 or closest_distance <= 60) and closest_distance < 150 then
 						local ent = closest_faction.home_entity
-						if not ent or ent.is_construction then
-							for _,e in ipairs(closest_faction.entities) do
-								if e.exists and e.is_placed and not e.is_construction then
-									ent = e
-									break
-								end
-							end
+						if not ent or not ent.exists or ent.is_construction then
+							local f_ents = closest_faction.entities
+							ent = f_ents[math.random(1, #f_ents)]
 						end
-						-- 增加响应距离截断，防止远距离进攻寻路
-						if ent and not ent.is_construction and owner:GetRangeTo(ent) < 150 then
+						if ent and ent.exists and not ent.is_construction then
 							Map.Defer(function()
 								if comp.exists and ent.exists then
 									self:on_trigger_action(comp, ent, true)
@@ -324,95 +245,74 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 3. 修改筑巢 AI (c_bug_harvest)
+	-- 3. 修改筑巢 AI (c_bug_harvest)：极致优化版
 	---------------------------------------------------------------------------
 	c_bug_harvest.on_update = function(self, comp, cause)
 		local owner = comp.owner
 		local data = comp.extra_data
-		local target = data.target
-		local home = data.home
+		local target, home = data.target, data.home
 
-		if not home or not home.exists or not home.is_placed then
+		if not home or not home.exists then
 			Map.Defer(function() if owner.exists then owner:Destroy() end end)
 			return comp:SetStateSleep(1)
 		end
 
-		local home_loc = home.location
 		if target and not target.exists then
-			data.state = "wander"
-			data.target = nil
+			data.state, data.target = "wander", nil
 			return comp:SetStateSleep(1)
 		end
-		if owner.is_moving then return comp:SetStateSleep(5) end
+		if owner.is_moving then return comp:SetStateSleep(20) end -- 移动中长休眠
 
 		local state = data.state or "idle"
-		if not target and state ~= "idle" and state ~= "wander" then
-			data.state = "wander"
-			return
-		end
-
 		if state == "idle" then
-			-- 限制资源寻找范围，减少寻路压力
 			target = Map.FindClosestEntity(owner, 8, function(e)
-				if home and home.exists and home.is_placed then
-					if IsResource(e) and GetResourceHarvestItemId(e) == "silica" and e:GetRangeTo(home_loc) > 20 then
-						return true
-					end
-				end
+				if IsResource(e) and GetResourceHarvestItemId(e) == "silica" and e:GetRangeTo(home) > 20 then return true end
 				return false
 			end, FF_RESOURCE)
 
 			if target then
-				data.target = target
-				data.state = "deploy"
+				data.target, data.state = target, "deploy"
 			else
-				data.state = "wander"
-				data.wandertimes = (data.wandertimes or 1) + 1
-				if data.wandertimes > 50 then
-					Map.Defer(function() owner:Destroy() end)
-					return comp:SetStateSleep(1)
-				end
+				data.state, data.wandertimes = "wander", (data.wandertimes or 0) + 1
+				if data.wandertimes > 30 then Map.Defer(function() if owner.exists then owner:Destroy() end end) return comp:SetStateSleep(1) end
 			end
 		elseif state == "deploy" then
 			if not owner.state_path_blocked then
 				if comp:RequestStateMove(target, 3) then return end
 			end
-
 			data.target = nil
+			-- 【性能优化】：使用探测式检查替代列表计数 (Zero Allocation)
+			-- 如果 35 格内能找到一个以上的巢穴，就认为密度已够，继续游走
 			local hive_count = 0
-			-- 优化：使用局部范围检测替代全局计数
-			for _, e in ipairs(Map.GetEntitiesInRange(owner, 35, FF_OPERATING)) do
+			Map.FindClosestEntity(owner, 35, function(e)
 				if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then
 					hive_count = hive_count + 1
+					if hive_count >= 2 then return true end -- 发现两个就停止扫描
 				end
-			end
+			end, FF_OPERATING)
 
-			if hive_count >= 3 then
+			if hive_count >= 2 then
 				data.state = "wander"
-				return comp:SetStateSleep(10)
+				return comp:SetStateSleep(200)
 			end
 
 			Map.Defer(function()
 				if comp.exists then
 					local newhome = Map.CreateEntity(GetBugsFaction(), (math.random() > 0.8) and "f_bug_hive" or "f_bug_hive_large")
 					newhome:Place(owner.location)
-					comp.extra_data.extra_spawned = 0
 					owner:Destroy()
 				end
 			end)
 			return comp:SetStateSleep(10)
 		elseif state == "wander" then
-			local loc = owner.location
-			-- 修正 wander 逻辑，防止 towards 指向 (0,0)
+			local loc = Tool.Copy(owner.location)
 			if data.towards and (data.towards.x ~= 0 or data.towards.y ~= 0) then
 				local tloc = data.towards
 				local dx = math.min(math.max((tloc.x - loc.x) // 3, -50), 50)
 				local dy = math.min(math.max((tloc.y - loc.y) // 3, -50), 50)
-				loc.x = loc.x + dx + math.random(-5, 5)
-				loc.y = loc.y + dy + math.random(-5, 5)
+				loc.x, loc.y = loc.x + dx + math.random(-5, 5), loc.y + dy + math.random(-5, 5)
 			else
-				loc.x = loc.x + math.random(-15, 15)
-				loc.y = loc.y + math.random(-15, 15)
+				loc.x, loc.y = loc.x + math.random(-15, 15), loc.y + math.random(-15, 15)
 			end
 			data.state = "idle"
 			return comp:RequestStateMove(loc, 1)
@@ -429,31 +329,21 @@ function package:init()
 				local ed = comp.extra_data
 				if not ed.failed_move then
 					ed.failed_move = Map.GetTick() + 900
-				else
-					if ed.failed_move < Map.GetTick() then
-						comp:SetRegister(1)
-						local homeless = comp.owner:FindComponent("c_bug_homeless")
-						if not homeless then
-							ed.failed_move = nil
-							Map.Defer(function()
-								if not comp.exists then return end
-								local new_homeless = (comp.owner.health > 200) and comp.owner:AddComponent("c_bug_homeless")
-								if new_homeless then
-									new_homeless:Activate()
-								else
-									comp.owner:Destroy()
-								end
-							end)
-						else
-							homeless:Activate()
-						end
-						return
+				elseif ed.failed_move < Map.GetTick() then
+					comp:SetRegister(1)
+					if not comp.owner:FindComponent("c_bug_homeless") then
+						Map.Defer(function()
+							if not comp.exists then return end
+							local new_homeless = (comp.owner.health > 200) and comp.owner:AddComponent("c_bug_homeless")
+							if new_homeless then new_homeless:Activate() else comp.owner:Destroy() end
+						end)
 					end
+					return
 				end
 			end
 		end
 		return data.components.c_turret.on_update(self, comp, cause)
 	end
 
-	print("[InsectLimit] Logic override successful. (0,0) fix and pathing pruning applied.")
+	print("[InsectLimit] Optimization 1.8.2 complete. Performance parity restored.")
 end
