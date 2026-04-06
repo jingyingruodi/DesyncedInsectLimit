@@ -1,5 +1,5 @@
 -- InsectLimit Mod - Dedicated Server Compatible
--- Version: 1.8.2 (Performance Breakthrough: Native counters, Search pruning, Zero-allocation density check)
+-- Version: 1.8.3 (Performance & Pathfinding Fix: HQ Distance Pruning, TPS Jitter, Swarm Cooldown)
 
 local package = ...
 
@@ -19,19 +19,6 @@ function package:init()
 	-- 辅助函数：还原原版季节活跃度判断
 	local function IsBugActiveSeason()
 		return math.abs(Map.GetYearSeason() - 0.5) < 0.25
-	end
-
-	-- 辅助函数：检查一个派系是否真的有“可被攻击”的实体
-	local function FactionHasAttackableEntities(faction)
-		if faction.num_entities <= 0 then return false end
-		-- 采样检查：只看前 10 个实体，大幅减少遍历开销
-		local entities = faction.entities
-		local max_check = math.min(#entities, 10)
-		for i=1, max_check do
-			local e = entities[i]
-			if e and e.exists and not e.is_construction then return true end
-		end
-		return false
 	end
 
 	---------------------------------------------------------------------------
@@ -57,10 +44,10 @@ function package:init()
 				if e.id ~= "f_bug_hive" then return end
 				local c = e:FindComponent("c_bug_spawn")
 				self:on_trigger_action(c, other_entity, force)
-			end, FF_OPERATING)
+			end, FF_OPERATING | FF_OWNFACTION)
 		end
 
-		-- 性能截断：不响应远距离触发
+		-- 性能截断：不响应远距离触发（除非强制）
 		if not force and comp.owner:GetRangeTo(other_entity) > 100 then return end
 
 		if not other_entity.faction.is_player_controlled or owner_faction:GetTrust(other_entity) ~= "ENEMY" or other_entity.stealth or other_entity.is_construction then
@@ -111,8 +98,9 @@ function package:init()
 
 		if force and settings.peaceful == 3 then
 			num = math.max(math.ceil(player_level * 0.4) + 1, num)
-			-- 【性能核心】：回归内置计数器，避免 Lua 遍历开销
-			if comp.faction.num_entities > (4000 * difficulty) then num = num // 3 end
+			-- 基于人数动态扩容判定
+			local pop_limit = 4000 * (Map.GetPlayerFactionCount and Map.GetPlayerFactionCount() or 1) * difficulty
+			if comp.faction.num_entities > pop_limit then num = num // 3 end
 		else
 			num = math.min((player_level // 3)+1, num)
 		end
@@ -160,11 +148,20 @@ function package:init()
 		local bugs_faction = GetBugsFaction()
 		local settings = Map.GetSettings()
 		local peaceful = settings.peaceful
-		if peaceful == 1 then return comp:SetStateSleep(20000) end
+		if peaceful == 1 then return comp:SetStateSleep(20000 + math.random(1, 100)) end
 
-		-- 【性能核心】：上限已满时使用原版 num_entities 极速判断
+		-- 【性能核心】：引入全局攻势冷却，平滑多蜂巢同时触发的负载
+		local last_swarm = Map.GetSave().last_swarm or 0
+		local map_tick = Map.GetTick()
+		if map_tick - last_swarm < 750 then
+			return comp:SetStateSleep(750 - (map_tick - last_swarm) + math.random(1, 50))
+		end
+
+		-- 【性能核心】：上限判定，基于玩家数缩放
 		local current_total = bugs_faction.num_entities
-		if current_total > 30000 then return comp:SetStateSleep(5000) end
+		local difficulty = settings.difficulty or 1.0
+		local max_total = 30000 * (Map.GetPlayerFactionCount and Map.GetPlayerFactionCount() or 1)
+		if current_total > max_total then return comp:SetStateSleep(5000 + math.random(1, 500)) end
 
 		local extra_data = comp.extra_data
 		if not extra_data.extra_spawned then extra_data.extra_spawned = 0 end
@@ -174,9 +171,9 @@ function package:init()
 		if extra_data.extra_spawned > 10 then
 			local rnd = math.random()
 			if rnd < 0.2 then
-				local found = Map.FindClosestEntity(owner, 5, function(e)
+				local found = Map.FindClosestEntity(owner, 10, function(e)
 					return e.id == "f_bug_hive" or e.id == "f_bug_hive_large"
-				end, FF_OPERATING)
+				end, FF_OPERATING | FF_OWNFACTION)
 				if not found then
 					Map.Defer(function()
 						if comp.exists then
@@ -190,12 +187,23 @@ function package:init()
 				if not IsBugActiveSeason() and math.random() > 0.1 then return comp:SetStateSleep(math.random(2000, 4000)) end
 
 				local closest_distance, closest_faction, towards = 9999999
-				-- 【性能核心】：采用原版抽样搜索，不进行大规模距离计算
+				-- 【性能核心】：采样搜索玩家实体
 				for _, faction in ipairs(Map.GetFactions()) do
 					if faction.is_player_controlled and faction.num_entities > 0 and bugs_faction:GetTrust(faction) == "ENEMY" then
 						local entities = faction.entities
-						local test_entity = entities[math.random(1, #entities)]
-						if test_entity and test_entity.exists and not test_entity.is_construction then
+						-- 实验版优化：检测并跳过 Docked 单位
+						local test_entity
+						local tries = 0
+						while tries < 5 do
+							test_entity = entities[math.random(1, #entities)]
+							if test_entity and test_entity.exists and not test_entity.is_construction then
+								if test_entity.is_docked then test_entity = test_entity.docked_garage end
+								if test_entity and test_entity.is_placed then break end
+							end
+							tries = tries + 1
+						end
+
+						if test_entity and test_entity.is_placed then
 							local d = owner:GetRangeTo(test_entity)
 							-- 探测剪枝：只感应 250 格
 							if d < 250 and d < closest_distance then
@@ -206,7 +214,6 @@ function package:init()
 				end
 
 				if closest_faction then
-					local difficulty = settings.difficulty or 1.0
 					if ((peaceful == 2 and closest_distance > 20) or (closest_distance > 150)) and (current_total < (10000 * difficulty)) then
 						if math.random() > 0.6 then
 							Map.Defer(function()
@@ -223,16 +230,18 @@ function package:init()
 						end
 						comp.extra_data.extra_spawned = 0
 						return comp:SetStateSleep(math.random(4000,8000))
-					elseif (peaceful == 3 or closest_distance <= 60) and closest_distance < 150 then
-						local ent = closest_faction.home_entity
-						if not ent or not ent.exists or ent.is_construction then
-							local f_ents = closest_faction.entities
-							ent = f_ents[math.random(1, #f_ents)]
+					elseif (peaceful == 3 or closest_distance <= 60) and closest_distance < 250 then
+						-- 【寻路优化核心】：如果 HQ 在感应范围内则攻击 HQ，否则锁定当前探测到的具体实体
+						local attack_target = closest_faction.home_entity
+						if not attack_target or not attack_target.exists or attack_target.is_construction or owner:GetRangeTo(attack_target) > 250 then
+							attack_target = towards
 						end
-						if ent and ent.exists and not ent.is_construction then
+
+						if attack_target and attack_target.exists then
+							Map.GetSave().last_swarm = Map.GetTick()
 							Map.Defer(function()
-								if comp.exists and ent.exists then
-									self:on_trigger_action(comp, ent, true)
+								if comp.exists and attack_target.exists then
+									self:on_trigger_action(comp, attack_target, true)
 									comp.extra_data.extra_spawned = 0
 								end
 							end)
@@ -241,7 +250,8 @@ function package:init()
 				end
 			end
 		end
-		return comp:SetStateSleep(math.random(300,600))
+		-- 增加抖动量，均匀分布不同 Tick 间的计算压力
+		return comp:SetStateSleep(math.random(300, 600))
 	end
 
 	---------------------------------------------------------------------------
@@ -261,7 +271,7 @@ function package:init()
 			data.state, data.target = "wander", nil
 			return comp:SetStateSleep(1)
 		end
-		if owner.is_moving then return comp:SetStateSleep(20) end -- 移动中长休眠
+		if owner.is_moving then return comp:SetStateSleep(20 + math.random(1, 10)) end
 
 		local state = data.state or "idle"
 		if state == "idle" then
@@ -281,19 +291,18 @@ function package:init()
 				if comp:RequestStateMove(target, 3) then return end
 			end
 			data.target = nil
-			-- 【性能优化】：使用探测式检查替代列表计数 (Zero Allocation)
-			-- 如果 35 格内能找到一个以上的巢穴，就认为密度已够，继续游走
+			-- 【性能优化】：探测式检查密度
 			local hive_count = 0
 			Map.FindClosestEntity(owner, 35, function(e)
 				if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then
 					hive_count = hive_count + 1
-					if hive_count >= 2 then return true end -- 发现两个就停止扫描
+					if hive_count >= 2 then return true end
 				end
-			end, FF_OPERATING)
+			end, FF_OPERATING | FF_OWNFACTION)
 
 			if hive_count >= 2 then
 				data.state = "wander"
-				return comp:SetStateSleep(200)
+				return comp:SetStateSleep(200 + math.random(1, 50))
 			end
 
 			Map.Defer(function()
@@ -303,7 +312,7 @@ function package:init()
 					owner:Destroy()
 				end
 			end)
-			return comp:SetStateSleep(10)
+			return comp:SetStateSleep(10 + math.random(1, 10))
 		elseif state == "wander" then
 			local loc = Tool.Copy(owner.location)
 			if data.towards and (data.towards.x ~= 0 or data.towards.y ~= 0) then
@@ -345,5 +354,5 @@ function package:init()
 		return data.components.c_turret.on_update(self, comp, cause)
 	end
 
-	print("[InsectLimit] Optimization 1.8.2 complete. Performance parity restored.")
+	print("[InsectLimit] Optimization 1.8.3 complete. Pathfinding & multi-player scale balanced.")
 end
