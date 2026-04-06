@@ -1,10 +1,10 @@
 -- InsectLimit Mod - Dedicated Server Compatible
--- Version: 1.7.8 (Critical Fix: Restore unit melee range by fixing Lua method call)
+-- Version: 1.7.9 (Fix: Scout (0,0) clump, Added pathfinding distance pruning, Optimized Scout AI)
 
 local package = ...
 
 function package:init()
-	print("[InsectLimit] Initializing full fidelity bug logic...")
+	print("[InsectLimit] Initializing safety-first bug logic override...")
 
 	local c_bug_spawn = data.components.c_bug_spawn
 	local c_bug_spawner_large = data.components.c_bug_spawner_large
@@ -68,6 +68,11 @@ function package:init()
 				local c = e:FindComponent("c_bug_spawn")
 				self:on_trigger_action(c, other_entity, force)
 			end, FF_OPERATING)
+		end
+
+		-- 距离截断：不响应太远处的触发（防止长距离寻路）
+		if not force and comp.owner:GetRangeTo(other_entity) > 100 then
+			return
 		end
 
 		if not other_entity.faction.is_player_controlled or owner_faction:GetTrust(other_entity) ~= "ENEMY" or other_entity.stealth or other_entity.is_construction then
@@ -246,8 +251,9 @@ function package:init()
 					if faction.is_player_controlled and FactionHasAttackableEntities(faction) and bugs_faction:GetTrust(faction) == "ENEMY" then
 						local newdist = 9999998
 						local valid_targets = {}
+						-- 增加探测范围限制，减少对极远处玩家的扫描负担
 						for _, ent in ipairs(faction.entities) do
-							if ent.exists and not ent.is_construction then
+							if ent.exists and not ent.is_construction and owner:GetRangeTo(ent) < 250 then
 								table.insert(valid_targets, ent)
 							end
 						end
@@ -275,8 +281,17 @@ function package:init()
 								scout:Place(owner)
 								local harvest_comp = scout:FindComponent("c_bug_harvest")
 								harvest_comp.extra_data.home = owner
-								if rnd_scout > 0.7 or mobile_count > 500 then
-									harvest_comp.extra_data.towards = towards and towards.location or closest_faction.home_location
+								-- 修复：严谨校验 towards 坐标，防止 (0,0) 扎堆
+								if towards and towards.exists then
+									local tloc = towards.location
+									if tloc.x ~= 0 or tloc.y ~= 0 then
+										harvest_comp.extra_data.towards = Tool.Copy(tloc)
+									end
+								elseif closest_faction.home_location then
+									local hloc = closest_faction.home_location
+									if hloc.x ~= 0 or hloc.y ~= 0 then
+										harvest_comp.extra_data.towards = Tool.Copy(hloc)
+									end
 								end
 							end)
 						end
@@ -292,7 +307,8 @@ function package:init()
 								end
 							end
 						end
-						if ent and not ent.is_construction then
+						-- 增加响应距离截断，防止远距离进攻寻路
+						if ent and not ent.is_construction and owner:GetRangeTo(ent) < 150 then
 							Map.Defer(function()
 								if comp.exists and ent.exists then
 									self:on_trigger_action(comp, ent, true)
@@ -336,6 +352,7 @@ function package:init()
 		end
 
 		if state == "idle" then
+			-- 限制资源寻找范围，减少寻路压力
 			target = Map.FindClosestEntity(owner, 8, function(e)
 				if home and home.exists and home.is_placed then
 					if IsResource(e) and GetResourceHarvestItemId(e) == "silica" and e:GetRangeTo(home_loc) > 20 then
@@ -363,6 +380,7 @@ function package:init()
 
 			data.target = nil
 			local hive_count = 0
+			-- 优化：使用局部范围检测替代全局计数
 			for _, e in ipairs(Map.GetEntitiesInRange(owner, 35, FF_OPERATING)) do
 				if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then
 					hive_count = hive_count + 1
@@ -385,7 +403,8 @@ function package:init()
 			return comp:SetStateSleep(10)
 		elseif state == "wander" then
 			local loc = owner.location
-			if data.towards then
+			-- 修正 wander 逻辑，防止 towards 指向 (0,0)
+			if data.towards and (data.towards.x ~= 0 or data.towards.y ~= 0) then
 				local tloc = data.towards
 				local dx = math.min(math.max((tloc.x - loc.x) // 3, -50), 50)
 				local dy = math.min(math.max((tloc.y - loc.y) // 3, -50), 50)
@@ -433,10 +452,8 @@ function package:init()
 				end
 			end
 		end
-		-- 【修复】使用静态调用，确保 self 指向虫子组件定义而不是防御塔定义
-		-- 这样虫子的 attack_radius (1) 就会生效，而不是错误地使用防御塔的 (7)
 		return data.components.c_turret.on_update(self, comp, cause)
 	end
 
-	print("[InsectLimit] Logic override successful. Critical melee range fix applied.")
+	print("[InsectLimit] Logic override successful. (0,0) fix and pathing pruning applied.")
 end
