@@ -2,9 +2,9 @@
 	"id": "InsectLimit",
 	"name": "虫群单位上限修改 (Insect Limit)",
 	"author": "镜影若滴",
-	"version_name": "1.8.3",
-	"version_code": 20,
-	"description": "1.8.3版引入了攻击目标感应剪枝逻辑，修复了虫群因长距离寻路主基地而导致的性能杀手Bug。同时加入了随机化Tick唤醒（Jitter）与全局攻势冷却，进一步平滑CPU负载峰值并适配多玩家规模缩放。",
+	"version_name": "1.8.4",
+	"version_code": 21,
+	"description": "1.8.4版优化了隐身感知逻辑，修复了主基地隐身后虫群停止进攻暴露目标的瑕疵。同时在所有休眠逻辑中引入了随机Tick抖动（Jitter），有效平摊了5 TPS环境下的瞬时计算压力，确保大规模集群下的逻辑流畅度。",
 	"packages": {
 		"InsectLimitAmin": {
 			"name": "InsectLimitAmin",

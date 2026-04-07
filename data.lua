@@ -1,5 +1,5 @@
 -- InsectLimit Mod - Dedicated Server Compatible
--- Version: 1.8.3 (Performance & Pathfinding Fix: HQ Distance Pruning, TPS Jitter, Swarm Cooldown)
+-- Version: 1.8.4 (Stealth Logic Fix & TPS Load Balancing)
 
 local package = ...
 
@@ -47,9 +47,10 @@ function package:init()
 			end, FF_OPERATING | FF_OWNFACTION)
 		end
 
-		-- 性能截断：不响应远距离触发（除非强制）
+		-- 性能截断：不响应远距离触发（除非强制进攻指令）
 		if not force and comp.owner:GetRangeTo(other_entity) > 100 then return end
 
+		-- 隐身实体不触发生成器
 		if not other_entity.faction.is_player_controlled or owner_faction:GetTrust(other_entity) ~= "ENEMY" or other_entity.stealth or other_entity.is_construction then
 			return
 		end
@@ -98,7 +99,7 @@ function package:init()
 
 		if force and settings.peaceful == 3 then
 			num = math.max(math.ceil(player_level * 0.4) + 1, num)
-			-- 基于人数动态扩容判定
+			-- 动态上限缩放
 			local pop_limit = 4000 * (Map.GetPlayerFactionCount and Map.GetPlayerFactionCount() or 1) * difficulty
 			if comp.faction.num_entities > pop_limit then num = num // 3 end
 		else
@@ -148,20 +149,19 @@ function package:init()
 		local bugs_faction = GetBugsFaction()
 		local settings = Map.GetSettings()
 		local peaceful = settings.peaceful
-		if peaceful == 1 then return comp:SetStateSleep(20000 + math.random(1, 100)) end
+		if peaceful == 1 then return comp:SetStateSleep(20000 + math.random(1, 500)) end
 
-		-- 【性能核心】：引入全局攻势冷却，平滑多蜂巢同时触发的负载
+		-- 全局攻势冷却 (尊重实验版逻辑)
 		local last_swarm = Map.GetSave().last_swarm or 0
 		local map_tick = Map.GetTick()
 		if map_tick - last_swarm < 750 then
 			return comp:SetStateSleep(750 - (map_tick - last_swarm) + math.random(1, 50))
 		end
 
-		-- 【性能核心】：上限判定，基于玩家数缩放
+		-- 上限判定
 		local current_total = bugs_faction.num_entities
-		local difficulty = settings.difficulty or 1.0
 		local max_total = 30000 * (Map.GetPlayerFactionCount and Map.GetPlayerFactionCount() or 1)
-		if current_total > max_total then return comp:SetStateSleep(5000 + math.random(1, 500)) end
+		if current_total > max_total then return comp:SetStateSleep(5000 + math.random(1, 200)) end
 
 		local extra_data = comp.extra_data
 		if not extra_data.extra_spawned then extra_data.extra_spawned = 0 end
@@ -187,25 +187,26 @@ function package:init()
 				if not IsBugActiveSeason() and math.random() > 0.1 then return comp:SetStateSleep(math.random(2000, 4000)) end
 
 				local closest_distance, closest_faction, towards = 9999999
-				-- 【性能核心】：采样搜索玩家实体
+				-- 采用采样搜索以优化性能
 				for _, faction in ipairs(Map.GetFactions()) do
 					if faction.is_player_controlled and faction.num_entities > 0 and bugs_faction:GetTrust(faction) == "ENEMY" then
 						local entities = faction.entities
-						-- 实验版优化：检测并跳过 Docked 单位
 						local test_entity
 						local tries = 0
+						-- 采样逻辑优化：增加对隐身实体的过滤
 						while tries < 5 do
 							test_entity = entities[math.random(1, #entities)]
-							if test_entity and test_entity.exists and not test_entity.is_construction then
+							if test_entity and test_entity.exists and not test_entity.is_construction and not test_entity.stealth then
 								if test_entity.is_docked then test_entity = test_entity.docked_garage end
-								if test_entity and test_entity.is_placed then break end
+								if test_entity and test_entity.is_placed and not test_entity.stealth then break end
 							end
+							test_entity = nil
 							tries = tries + 1
 						end
 
-						if test_entity and test_entity.is_placed then
+						if test_entity then
 							local d = owner:GetRangeTo(test_entity)
-							-- 探测剪枝：只感应 250 格
+							-- 探测剪枝：250 格感应范围
 							if d < 250 and d < closest_distance then
 								closest_faction, closest_distance, towards = faction, d, test_entity
 							end
@@ -214,7 +215,9 @@ function package:init()
 				end
 
 				if closest_faction then
+					local difficulty = settings.difficulty or 1.0
 					if ((peaceful == 2 and closest_distance > 20) or (closest_distance > 150)) and (current_total < (10000 * difficulty)) then
+						-- 派遣侦察虫
 						if math.random() > 0.6 then
 							Map.Defer(function()
 								if not owner.exists then return end
@@ -229,11 +232,13 @@ function package:init()
 							end)
 						end
 						comp.extra_data.extra_spawned = 0
-						return comp:SetStateSleep(math.random(4000,8000))
+						return comp:SetStateSleep(math.random(4000, 8000))
 					elseif (peaceful == 3 or closest_distance <= 60) and closest_distance < 250 then
-						-- 【寻路优化核心】：如果 HQ 在感应范围内则攻击 HQ，否则锁定当前探测到的具体实体
+						-- 【目标选择策略优化】：
+						-- 1. 优先尝试主基地，但主基地必须在感应范围内且不可隐身
 						local attack_target = closest_faction.home_entity
-						if not attack_target or not attack_target.exists or attack_target.is_construction or owner:GetRangeTo(attack_target) > 250 then
+						if not attack_target or not attack_target.exists or attack_target.is_construction or attack_target.stealth or owner:GetRangeTo(attack_target) > 250 then
+							-- 2. 如果主基地不可见或太远，则攻击刚才感应到的那个实体（towards 已确保不隐身）
 							attack_target = towards
 						end
 
@@ -250,12 +255,12 @@ function package:init()
 				end
 			end
 		end
-		-- 增加抖动量，均匀分布不同 Tick 间的计算压力
+		-- TPS Load Balancing: 唤醒时间随机抖动，避免大量蜂巢在同一 Tick 运行
 		return comp:SetStateSleep(math.random(300, 600))
 	end
 
 	---------------------------------------------------------------------------
-	-- 3. 修改筑巢 AI (c_bug_harvest)：极致优化版
+	-- 3. 修改筑巢 AI (c_bug_harvest)
 	---------------------------------------------------------------------------
 	c_bug_harvest.on_update = function(self, comp, cause)
 		local owner = comp.owner
@@ -291,7 +296,7 @@ function package:init()
 				if comp:RequestStateMove(target, 3) then return end
 			end
 			data.target = nil
-			-- 【性能优化】：探测式检查密度
+			-- 密度探测
 			local hive_count = 0
 			Map.FindClosestEntity(owner, 35, function(e)
 				if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then
@@ -354,5 +359,5 @@ function package:init()
 		return data.components.c_turret.on_update(self, comp, cause)
 	end
 
-	print("[InsectLimit] Optimization 1.8.3 complete. Pathfinding & multi-player scale balanced.")
+	print("[InsectLimit] Optimization 1.8.4 complete. Stealth-aware targeting enabled.")
 end
