@@ -1,5 +1,5 @@
 -- InsectLimit Mod - Dedicated Server Compatible
--- Version: 1.9.0 (Explorable Immunity Fix + Restored 1.8.4 Stealth Logic)
+-- Version: 1.9.2 (Pathfinding Refinement: Extended Stuck Timeout to 120s)
 
 local package = ...
 
@@ -21,17 +21,48 @@ function package:init()
 		return math.abs(Map.GetYearSeason() - 0.5) < 0.25
 	end
 
-	-- 【核心修复】：判断目标是否真正可被攻击（彻底排除无敌的可探索建筑、任务目标、蓝图、隐身）
+	-- 辅助函数：判断实体是否为可被攻击的合法目标
 	local function IsAttackable(e)
 		if not e or not e.exists or not e.is_placed then return false end
 		local def = e.def
-		-- 1. 过滤隐身和蓝图
 		if e.stealth or e.is_construction then return false end
-		-- 2. 深度过滤无敌实体：检查 immortal 标志和可探索项特征
 		if def.immortal or def.is_explorable or def.size == "Mission" then return false end
-		-- 3. 过滤掉落物和纯资源
 		if def.type == "DroppedItem" or def.type == "Resource" then return false end
 		return true
+	end
+
+	-- 【核心重构】：通用的虫群攻击更新逻辑，处理卡死脱困
+	local function BugAttackUpdate(self, comp, cause)
+		if not comp.faction.is_player_controlled then
+			local owner = comp.owner
+			-- 判定卡死：路径被阻挡（state_path_blocked）或处于特殊自定义状态（如受阻）
+			local is_stuck = (cause & CC_FINISH_MOVE ~= 0 and owner.state_path_blocked) or owner.state_custom_1
+
+			if is_stuck then
+				local ed = comp.extra_data
+				if not ed.failed_move_ticks then
+					-- 调整为 120 秒判定时间 (120 * 5 = 600 ticks)
+					ed.failed_move_ticks = Map.GetTick() + 600
+				elseif ed.failed_move_ticks < Map.GetTick() then
+					ed.failed_move_ticks = nil
+					-- 【重点修复】：清除 Reg 1 指令，确保归巢逻辑不被炮塔重新发出的移动指令覆盖
+					if not comp:RegisterIsLink(1) then comp:SetRegister(1, nil) end
+
+					if not owner:FindComponent("c_bug_homeless") then
+						Map.Defer(function()
+							if not comp.exists then return end
+							local new_homeless = (owner.health > 200) and owner:AddComponent("c_bug_homeless")
+							if new_homeless then new_homeless:Activate() else owner:Destroy() end
+						end)
+					end
+					return
+				end
+			else
+				comp.extra_data.failed_move_ticks = nil
+			end
+		end
+		-- 调用原版炮塔逻辑
+		return data.components.c_turret.on_update(self, comp, cause)
 	end
 
 	---------------------------------------------------------------------------
@@ -60,10 +91,8 @@ function package:init()
 			end, FF_OPERATING | FF_OWNFACTION)
 		end
 
-		-- 性能截断
 		if not force and comp.owner:GetRangeTo(other_entity) > 100 then return end
 
-		-- 触发源有效性校验
 		if not IsAttackable(other_entity) or owner_faction:GetTrust(other_entity) ~= "ENEMY" then
 			return
 		end
@@ -162,12 +191,10 @@ function package:init()
 		local settings = Map.GetSettings()
 		if settings.peaceful == 1 then return comp:SetStateSleep(20000 + math.random(1, 500)) end
 
-		-- 全局攻势冷却
 		local last_swarm = Map.GetSave().last_swarm or 0
 		local map_tick = Map.GetTick()
 		if map_tick - last_swarm < 750 then return comp:SetStateSleep(750 - (map_tick - last_swarm) + math.random(1, 50)) end
 
-		-- 上限判定
 		local pc = Map.GetPlayerFactionCount and Map.GetPlayerFactionCount() or 1
 		if bugs_faction.num_entities > (30000 * pc) then return comp:SetStateSleep(5000 + math.random(1, 200)) end
 
@@ -200,15 +227,10 @@ function package:init()
 						local entities = faction.entities
 						local test_unit
 						local tries = 0
-
-						-- 【1.8.4 成功逻辑回归 + 彻底排除无敌 Explorable】
 						while tries < 20 do
 							local ent = entities[math.random(1, #entities)]
-							-- 1. 验证采样点单位是否显身
-							if ent and ent.exists and not ent.stealth and not ent.is_construction then
-								-- 2. 处理驻留，跳转到最终地图目标
+							if ent and ent.exists and not ent.stealth then
 								if ent.is_docked then ent = ent.docked_garage end
-								-- 3. 对最终目标执行“可攻击性”严密校验
 								if IsAttackable(ent) then
 									test_unit = ent
 									break
@@ -219,7 +241,6 @@ function package:init()
 
 						if test_unit then
 							local d = owner:GetRangeTo(test_unit)
-							-- 探测剪枝：维持 250 格原始范围
 							if d < 250 and d < closest_distance then
 								closest_faction, closest_distance, towards = faction, d, test_unit
 							end
@@ -245,7 +266,6 @@ function package:init()
 						comp.extra_data.extra_spawned = 0
 						return comp:SetStateSleep(math.random(4000, 8000))
 					elseif (settings.peaceful == 3 or closest_distance <= 60) and closest_distance < 250 then
-						-- 目标选择：HQ 也必须通过“非无敌”校验
 						local attack_target = closest_faction.home_entity
 						if not IsAttackable(attack_target) or owner:GetRangeTo(attack_target) > 250 then
 							attack_target = towards
@@ -264,7 +284,6 @@ function package:init()
 				end
 			end
 		end
-		-- 随机唤醒抖动
 		return comp:SetStateSleep(math.random(300, 600))
 	end
 
@@ -342,30 +361,18 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 4. 修改虫群攻击逻辑 (c_trilobyte_attack)
+	-- 4. 重构虫群攻击组件 (统一卡死处理逻辑)
 	---------------------------------------------------------------------------
-	c_trilobyte_attack.on_update = function(self, comp, cause)
-		if not comp.faction.is_player_controlled then
-			local failed_move = cause & CC_FINISH_MOVE ~= 0 and comp.owner.state_path_blocked
-			if failed_move or comp.owner.state_custom_1 then
-				local ed = comp.extra_data
-				if not ed.failed_move then
-					ed.failed_move = Map.GetTick() + 900
-				elseif ed.failed_move < Map.GetTick() then
-					comp:SetRegister(1)
-					if not comp.owner:FindComponent("c_bug_homeless") then
-						Map.Defer(function()
-							if not comp.exists then return end
-							local new_homeless = (comp.owner.health > 200) and comp.owner:AddComponent("c_bug_homeless")
-							if new_homeless then new_homeless:Activate() else comp.owner:Destroy() end
-						end)
-					end
-					return
-				end
-			end
-		end
-		return data.components.c_turret.on_update(self, comp, cause)
+	c_trilobyte_attack.on_update = BugAttackUpdate
+
+	-- 修复 Mortako (Tako) 容易在远程攻击位卡死的问题
+	if data.components.c_tetrapuss_attack1 then
+		data.components.c_tetrapuss_attack1.on_update = BugAttackUpdate
 	end
 
-	print("[InsectLimit] Optimization 1.9.0 complete. Long-range sensing & Immortal filtering balanced.")
+	--Larva 也需要一致的脱困逻辑
+	if data.components.c_larva_attack1 then data.components.c_larva_attack1.on_update = BugAttackUpdate end
+	if data.components.c_larva_attack2 then data.components.c_larva_attack2.on_update = BugAttackUpdate end
+
+	print("[InsectLimit] Optimization 1.9.2 complete. Extended stuck-recovery logic applied.")
 end
