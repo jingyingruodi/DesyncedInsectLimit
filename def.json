@@ -2,9 +2,9 @@
 	"id": "InsectLimit",
 	"name": "虫群单位上限修改 (Insect Limit)",
 	"author": "镜影若滴",
-	"version_name": "1.8.4",
-	"version_code": 21,
-	"description": "1.8.4版优化了隐身感知逻辑，修复了主基地隐身后虫群停止进攻暴露目标的瑕疵。同时在所有休眠逻辑中引入了随机Tick抖动（Jitter），有效平摊了5 TPS环境下的瞬时计算压力，确保大规模集群下的逻辑流畅度。",
+	"version_name": "1.9.0",
+	"version_code": 25,
+	"description": "1.9.0版在恢复1.8.4版强化了对Explorable、无敌建筑及任务目标的底层过滤。解决了黑入无敌建筑导致的虫群囤积问题。",
 	"packages": {
 		"InsectLimitAmin": {
 			"name": "InsectLimitAmin",
