@@ -1,5 +1,5 @@
 -- InsectLimit Mod - Dedicated Server Compatible
--- Version: 1.9.2 (Pathfinding Refinement: Extended Stuck Timeout to 120s)
+-- Version: 1.9.6 (Targeting Fix Base 1.9.2 + Persistent Stuck Timer Fix)
 
 local package = ...
 
@@ -21,31 +21,29 @@ function package:init()
 		return math.abs(Map.GetYearSeason() - 0.5) < 0.25
 	end
 
-	-- 辅助函数：判断实体是否为可被攻击的合法目标
+	-- 辅助函数：判断实体是否为真正可攻击目标
 	local function IsAttackable(e)
 		if not e or not e.exists or not e.is_placed then return false end
 		local def = e.def
-		if e.stealth or e.is_construction then return false end
-		if def.immortal or def.is_explorable or def.size == "Mission" then return false end
+		if e.stealth or e.is_construction or def.immortal or def.is_explorable or def.size == "Mission" then return false end
 		if def.type == "DroppedItem" or def.type == "Resource" then return false end
 		return true
 	end
 
-	-- 【核心重构】：通用的虫群攻击更新逻辑，处理卡死脱困
+	-- 【核心重构】：通用的虫群攻击更新逻辑
 	local function BugAttackUpdate(self, comp, cause)
 		if not comp.faction.is_player_controlled then
 			local owner = comp.owner
-			-- 判定卡死：路径被阻挡（state_path_blocked）或处于特殊自定义状态（如受阻）
+			-- 判定卡死：路径被阻挡
 			local is_stuck = (cause & CC_FINISH_MOVE ~= 0 and owner.state_path_blocked) or owner.state_custom_1
+			local ed = comp.extra_data
 
 			if is_stuck then
-				local ed = comp.extra_data
 				if not ed.failed_move_ticks then
-					-- 调整为 120 秒判定时间 (120 * 5 = 600 ticks)
-					ed.failed_move_ticks = Map.GetTick() + 600
+					ed.failed_move_ticks = Map.GetTick() + 600 -- 120秒
 				elseif ed.failed_move_ticks < Map.GetTick() then
 					ed.failed_move_ticks = nil
-					-- 【重点修复】：清除 Reg 1 指令，确保归巢逻辑不被炮塔重新发出的移动指令覆盖
+					-- 强制清除 Reg 1，确保归巢逻辑能顺利执行
 					if not comp:RegisterIsLink(1) then comp:SetRegister(1, nil) end
 
 					if not owner:FindComponent("c_bug_homeless") then
@@ -58,15 +56,17 @@ function package:init()
 					return
 				end
 			else
-				comp.extra_data.failed_move_ticks = nil
+				-- 【持久化修复】：只有在真正顺畅移动时才重置计时器，微小位移或静止不重置
+				if not owner.state_path_blocked and owner.is_moving then
+					ed.failed_move_ticks = nil
+				end
 			end
 		end
-		-- 调用原版炮塔逻辑
 		return data.components.c_turret.on_update(self, comp, cause)
 	end
 
 	---------------------------------------------------------------------------
-	-- 1. 修改基础生成器逻辑 (c_bug_spawn)
+	-- 1. 修改基础生成器逻辑
 	---------------------------------------------------------------------------
 	c_bug_spawn.on_trigger = function (self, comp, other_entity, force)
 		if other_entity.faction.is_player_controlled then
@@ -179,7 +179,7 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 2. 修改大型生成器逻辑 (c_bug_spawner_large)
+	-- 2. 修改大型生成器逻辑
 	---------------------------------------------------------------------------
 	c_bug_spawner_large.on_update = function(self, comp, cause)
 		if comp.faction.is_player_controlled then
@@ -361,18 +361,12 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 4. 重构虫群攻击组件 (统一卡死处理逻辑)
+	-- 4. 虫群攻击卡死判定修复
 	---------------------------------------------------------------------------
 	c_trilobyte_attack.on_update = BugAttackUpdate
-
-	-- 修复 Mortako (Tako) 容易在远程攻击位卡死的问题
-	if data.components.c_tetrapuss_attack1 then
-		data.components.c_tetrapuss_attack1.on_update = BugAttackUpdate
-	end
-
-	--Larva 也需要一致的脱困逻辑
+	if data.components.c_tetrapuss_attack1 then data.components.c_tetrapuss_attack1.on_update = BugAttackUpdate end
 	if data.components.c_larva_attack1 then data.components.c_larva_attack1.on_update = BugAttackUpdate end
 	if data.components.c_larva_attack2 then data.components.c_larva_attack2.on_update = BugAttackUpdate end
 
-	print("[InsectLimit] Optimization 1.9.2 complete. Extended stuck-recovery logic applied.")
+	print("[InsectLimit] Optimization 1.9.6 complete. Homing logic reset to stable 1.9.2 with improved stuck detection.")
 end

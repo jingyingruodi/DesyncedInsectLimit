@@ -2,9 +2,9 @@
 	"id": "InsectLimit",
 	"name": "虫群单位上限修改 (Insect Limit)",
 	"author": "镜影若滴",
-	"version_name": "1.9.2",
-	"version_code": 27,
-	"description": "1.9.2版进一步优化了远程单位（如Mortako）的脱困逻辑，将卡死判定时间延长至120秒以适配大规模混战。在检测到无法到达目标时，强制清除攻击指令并引导单位归巢，从根源上解决了单位因碰撞或寻路失败导致的逻辑堆积问题。",
+	"version_name": "1.9.6",
+	"version_code": 31,
+	"description": "虫群单位上限30000，削减闸值4000，侦察建巢闸值10000。更新：1.9.6通过'动态位移检测'修复了进攻寻路卡死，确保在脱困与归巢逻辑。",
 	"packages": {
 		"InsectLimitAmin": {
 			"name": "InsectLimitAmin",
