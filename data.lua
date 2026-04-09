@@ -1,10 +1,10 @@
 -- InsectLimit Mod - Dedicated Server Compatible
--- Version: 2.2.4 (Performance Monitor Fix & Throttled Reaper Optimization)
+-- Version: 2.2.8 (Performance Optimized: Independent Census & Session Diagnostics)
 
 local package = ...
 
 function package:init()
-	print("[InsectLimit] Initializing v2.2.4 (Performance & Diagnostics Optimized)...")
+	print("[InsectLimit] Initializing stable v2.2.8...")
 
 	local c_bug_spawn = data.components.c_bug_spawn
 	local c_bug_spawner_large = data.components.c_bug_spawner_large
@@ -16,113 +16,77 @@ function package:init()
 		return
 	end
 
-	---------------------------------------------------------------------------
-	-- 1. 极速玩家位置缓存系统
-	---------------------------------------------------------------------------
-	local _player_pos_cache = {}
-	local function UpdatePlayerCache()
-		local pos = {}
-		for _, faction in ipairs(Map.GetFactions()) do
-			if faction.is_player_controlled then
-				local ents = faction.entities
-				for i=1, #ents do
-					local e = ents[i]
-					-- 排除无物理位置的逻辑实体
-					if e and e.exists and e.is_placed and e.id ~= "f_empty" and e.def.type ~= "DroppedItem" then
-						table.insert(pos, e.location)
-					end
-				end
-			end
-		end
-		_player_pos_cache = pos
-	end
-
-	local function IsPlayerNearbyLua(loc, radius)
-		local r_sq = radius * radius
-		local cache = _player_pos_cache
-		for i=1, #cache do
-			local p = cache[i]
-			local dx, dy = loc.x - p.x, loc.y - p.y
-			if (dx*dx + dy*dy) < r_sq then return true end
-		end
-		return false
-	end
+	-- 局部化高频方法以提升 Lua 虚拟机性能
+	local GetTick = Map.GetTick
 
 	---------------------------------------------------------------------------
-	-- 2. 全局普查与清理循环 (逻辑增强)
+	-- 1. 独立人口普查系统 (分时扫描，逻辑对齐 1.9.6)
 	---------------------------------------------------------------------------
-	local function RunIncrementalReaper(bugs_faction)
+	local function UpdateUnitCensus(bugs_faction)
 		local ed = bugs_faction.extra_data
 		local ents = bugs_faction.entities
 		local total = #ents
-		local current_tick = Map.GetTick()
+		local now = GetTick()
 
 		if total == 0 then
 			ed.unit_count = 0
-			ed.census_idx, ed.census_acc, ed.census_cleaned = 1, 0, 0
+			ed.census_idx = 1
 			return
 		end
 
-		-- 【修复】：每轮会话开始时精准重置计时器和计数器
+		-- 新一轮会话启动检测
 		if not ed.census_idx or ed.census_idx == 1 or ed.census_idx > total then
 			ed.census_idx = 1
 			ed.census_acc = 0
-			ed.census_cleaned = 0
-			ed.census_start_tick = current_tick
-			UpdatePlayerCache() -- 每一轮扫描前刷新一次玩家坐标快照
+			ed.census_start_tick = now
 		end
 
-		-- 每 Tick 扫描 300 个实体 (性能余量充足)
-		local end_idx = math.min(ed.census_idx + 300, total)
+		-- 每 Tick 扫描 100 个实体
+		local end_idx = math.min(ed.census_idx + 100, total)
 		local acc = ed.census_acc or 0
-		local cleaned = ed.census_cleaned or 0
-		local last_unit_count = ed.unit_count or 0
 
 		for i = ed.census_idx, end_idx do
 			local e = ents[i]
-			if e and e.exists and IsBot(e) then
-				acc = acc + 1
+			if e and e.exists then
+				local def = e.def
+				-- 精准区分：只有移动单位 (Bots) 才计入单位上限统计
+				if def and not def.type and (def.movement_speed or 0) > 0 then
+					acc = acc + 1
 
-				-- 病毒致死处理
-				if e.state_custom_1 and e.health <= 80 and not IsFlyingUnit(e) then
-					if not e.extra_data.virus_marked_for_death then
-						e.extra_data.virus_marked_for_death = true
-						e.powered_down = true
-						Map.Delay("BugPerishAction", 150, { entity = e })
-					end
-				end
-
-				-- 远距离清理 (仅当兵力 > 4000 时)
-				if last_unit_count >= 4000 and e.health < 400 and not IsFlyingUnit(e) then
-					local loc = e.is_placed and e.location or (e.docked_garage and e.docked_garage.location)
-					if loc and not IsPlayerNearbyLua(loc, 300) then
-						Map.Defer(function()
-							if e.exists then
-								if e.is_placed then e:PlayEffect("fx_digital") end
-								e:Destroy(false)
-							end
-						end)
-						cleaned = cleaned + 1
+					-- 【增量功能】：病毒致死判定 (HP <= 80)
+					-- 放在此处可确保即便单位关机或休眠，也能被“上帝视角”扫描并回收
+					if e.state_custom_1 and e.health <= 80 and def.cost_modifier ~= 0 then
+						if not e.extra_data.virus_marked_for_death then
+							e.extra_data.virus_marked_for_death = true
+							e.powered_down = true
+							if e.is_placed then e:PlayEffect("fx_glitch2") end
+							Map.Delay("BugPerishAction", 150, { entity = e })
+						end
 					end
 				end
 			end
 		end
 
 		if end_idx >= total then
-			-- 记录本轮结果
+			-- 会话结束报告
 			ed.unit_count = acc
-			local duration = current_tick - (ed.census_start_tick or current_tick) + 1
-			-- 输出更详细的诊断信息
-			print(string.format("[InsectLimit] Census Session -> BOTS: %d | Cleaned: %d | Total: %d | Time: %d ticks", acc, cleaned, total, duration))
-			ed.census_idx, ed.census_acc, ed.census_cleaned = 1, 0, 0
+			local duration = now - (ed.census_start_tick or now) + 1
+			print(string.format("[InsectLimit] Census Session Complete -> BOTS: %d | Total Assets: %d | Duration: %d ticks (~%.1fs)", acc, total, duration, duration / 5))
+			ed.census_idx = 1
 		else
 			ed.census_idx = end_idx + 1
 			ed.census_acc = acc
-			ed.census_cleaned = cleaned
 		end
 	end
 
-	-- 病毒致死回调
+	-- 注册全局后台任务
+	function Delay.GlobalCensusLoop(arg)
+		local bugs = GetBugsFaction()
+		if bugs then UpdateUnitCensus(bugs) end
+		Map.Delay("GlobalCensusLoop", 1)
+	end
+
+	-- 病毒覆灭回调
 	function Delay.BugPerishAction(arg)
 		local e = arg.entity
 		if e and e.exists then
@@ -131,79 +95,83 @@ function package:init()
 		end
 	end
 
-	-- 全局普查任务
-	function Delay.GlobalCensusLoop(arg)
-		local bugs = GetBugsFaction()
-		if bugs then RunIncrementalReaper(bugs) end
-		Map.Delay("GlobalCensusLoop", 1)
-	end
-
 	---------------------------------------------------------------------------
-	-- 3. 通用攻击逻辑 (维持 1.9.6 基准)
+	-- 2. 通用攻击逻辑 (基于 1.9.6 持久化计时器)
 	---------------------------------------------------------------------------
 	local function BugAttackUpdate(self, comp, cause)
 		if not comp.faction.is_player_controlled then
-			local owner, ed = comp.owner, comp.extra_data
+			local owner = comp.owner
+			local ed = comp.extra_data
 
+			-- 基础兵种感染后的防御性关机逻辑 (自毁由 Census 循环接管)
 			if owner.state_custom_1 and owner.health <= 80 and not IsFlyingUnit(owner) then
-				if not ed.virus_marked_for_death then
-					ed.virus_marked_for_death = true
-					owner.powered_down = true
-					Map.Delay("BugPerishAction", 150, { entity = owner })
-				end
+				owner.powered_down = true
 				return
 			end
 
 			local is_stuck = (cause & CC_FINISH_MOVE ~= 0 and owner.state_path_blocked) or owner.state_custom_1
 			if is_stuck then
-				if not ed.failed_move_ticks then ed.failed_move_ticks = Map.GetTick() + 600
-				elseif ed.failed_move_ticks < Map.GetTick() then
+				if not ed.failed_move_ticks then ed.failed_move_ticks = GetTick() + 600
+				elseif ed.failed_move_ticks < GetTick() then
 					ed.failed_move_ticks = nil
 					if not comp:RegisterIsLink(1) then comp:SetRegister(1, nil) end
 					if not owner:FindComponent("c_bug_homeless") then
-						Map.Defer(function() if comp.exists then owner:AddComponent("c_bug_homeless") end end)
+						Map.Defer(function()
+							if not comp.exists then return end
+							local new_homeless = (owner.health > 200) and owner:AddComponent("c_bug_homeless")
+							if new_homeless then new_homeless:Activate() else owner:Destroy() end
+						end)
 					end
 					return
 				end
 			else
+				-- 只有顺畅移动才重置计时
 				if not owner.state_path_blocked and owner.is_moving then ed.failed_move_ticks = nil end
 			end
 		end
 		return data.components.c_turret.on_update(self, comp, cause)
 	end
 
+	-- 辅助：判定合法攻击目标 (支持驻留重定向)
 	local function IsAttackable(e)
 		if not e or not e.exists then return false end
 		local target = e.is_placed and e or e.docked_garage
 		if not target or not target.exists or not target.is_placed or target.id == "f_empty" then return false end
+
 		local def = target.def
-		if target.stealth or target.is_construction or def.immortal or def.is_explorable or def.size == "Mission" then return false end
+		if target.stealth or target.is_construction or def.immortal or def.is_explorable or def.size == "Mission" then
+			return false
+		end
 		if def.type == "DroppedItem" or def.type == "Resource" then return false end
 		return true
 	end
 
 	---------------------------------------------------------------------------
-	-- 4. 蜂巢生产控制
+	-- 3. 蜂巢生产控制
 	---------------------------------------------------------------------------
 	c_bug_spawner_large.on_update = function(self, comp, cause)
 		if comp.faction.is_player_controlled then return comp:SetStateSleep(10000) end
+
 		local bugs_faction = GetBugsFaction()
 		local ed = bugs_faction.extra_data
 
 		-- 启动后台任务
 		if not ed.census_loop_started then
 			ed.census_loop_started = true
+			print("[InsectLimit] Starting Global Census Loop from Simulation Context...")
 			Map.Delay("GlobalCensusLoop", 1)
 		end
 
 		local unit_count = ed.unit_count or 0
 		local pc = Map.GetPlayerFactionCount and Map.GetPlayerFactionCount() or 1
 
+		-- 生产上限判定
 		if unit_count > (30000 * pc) then return comp:SetStateSleep(5000 + math.random(1, 200)) end
 
 		local last_swarm = Map.GetSave().last_swarm or 0
-		if Map.GetTick() - last_swarm < 750 then return comp:SetStateSleep(100) end
+		if GetTick() - last_swarm < 750 then return comp:SetStateSleep(100) end
 
+		-- 采样搜索玩家
 		local closest_distance, closest_faction, towards = 9999999
 		for _, faction in ipairs(Map.GetFactions()) do
 			if faction.is_player_controlled and faction.num_entities > 0 and bugs_faction:GetTrust(faction) == "ENEMY" then
@@ -241,7 +209,7 @@ function package:init()
 				local attack_target = closest_faction.home_entity
 				if not IsAttackable(attack_target) or comp.owner:GetRangeTo(attack_target) > 250 then attack_target = towards end
 				if attack_target and attack_target.exists then
-					Map.GetSave().last_swarm = Map.GetTick()
+					Map.GetSave().last_swarm = GetTick()
 					Map.Defer(function() if comp.exists and attack_target.exists then
 						data.components.c_bug_spawn:on_trigger_action(comp, attack_target, true)
 						comp.extra_data.extra_spawned = 0
@@ -258,5 +226,5 @@ function package:init()
 	if data.components.c_larva_attack1 then data.components.c_larva_attack1.on_update = BugAttackUpdate end
 	if data.components.c_larva_attack2 then data.components.c_larva_attack2.on_update = BugAttackUpdate end
 
-	print("[InsectLimit] v2.2.4: Optimized Census Monitor & Higher Throughput Cleanup.")
+	print("[InsectLimit] v2.2.8: Session-based Diagnostics & Performance Peak enabled.")
 end
