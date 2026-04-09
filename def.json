@@ -2,9 +2,9 @@
 	"id": "InsectLimit",
 	"name": "虫群单位上限修改 (Insect Limit)",
 	"author": "镜影若滴",
-	"version_name": "2.2.6",
-	"version_code": 48,
-	"description": "2.2.6稳定版。基于1.9.6最稳逻辑基准，实现了兵建分离的人口普查系统与病毒致死闭环。通过独立后台普查任务解决了地图积压虫穴导致的不产兵问题，并利用Map.Delay机制确保感染关机的小虫能准时覆灭。此版本暂未应用实验性的清理逻辑，确保了在大规模存档下的绝对稳定性与性能。",
+	"version_name": "2.3.0",
+	"version_code": 49,
+	"description": "2.3.0性能回归版。彻底移除了高开销的人口普查后台任务，逻辑完全回归事件驱动模式，性能表现恢复至1.9.6的巅峰水平。通过动态调高原生统计阈值解决了产兵矛盾，并保留了利用Map.Delay实现的感染单位准时覆灭机制，实现了极致流畅度与核心功能的完美共存。",
 	"packages": {
 		"InsectLimitAmin": {
 			"name": "InsectLimitAmin",
