@@ -1,6 +1,6 @@
 # Desynced Insect Limit Mod
 
-A performance optimization and AI-fix mod designed to enhance multiplayer and large-scale gameplay by refining swarm logic and population management.
+This is an optimization mod designed to fix flaws in the vanilla logic and improve the multiplayer server experience by increasing the swarm cap.
 
 ## 📖 Background
 In Desynced's vanilla logic, the swarm has several AI defects (e.g., besieging blueprints, map-wide marches) and a very low global population limit (4,000 entities). In multiplayer, this shared limit results in an inactive swarm during late-game stages, significantly diminishing the challenge of defensive gameplay.
