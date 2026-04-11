@@ -1,11 +1,11 @@
 -- InsectLimit Mod - Performance & Faithful Expansion Logic
--- Version: 2.5.2 (Census Philosophy Aligned + 30s Heartbeat)
+-- Version: 2.5.4 (Official Explorable-Attack Patch Aligned)
 -- Author: 镜影若滴
 
 local package = ...
 
 function package:init()
-	print("[InsectLimit] Initializing v2.5.2 - Unit-only Census Active...")
+	print("[InsectLimit] Initializing v2.5.4 - Explorable Targeting Aligned...")
 
 	local c_bug_spawn = data.components.c_bug_spawn
 	local c_bug_spawner_large = data.components.c_bug_spawner_large
@@ -18,7 +18,7 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 1. 全局普查系统 (极致低频 30秒/150 ticks 一次统计)
+	-- 1. 全局普查系统 (极致低频 30秒/150 ticks 一次)
 	---------------------------------------------------------------------------
 	function Delay.DiagnosticHeartbeat(arg)
 		local bugs = GetBugsFaction()
@@ -32,13 +32,9 @@ function package:init()
 		for i = 1, total do
 			local e = ents[i]
 			if e and e.exists then
-				-- 【设计哲学差异】：
-				-- 官方统计(num_entities)包含所有实体（虫巢+虫子）。
-				-- 本模组统计(unit_count)仅包含具有移动能力的非建筑单位。
-				-- 这样可以防止大量筑巢后导致战斗单位名额被占用的情况。
 				if e.has_movement and not e.is_construction then
 					bot_count = bot_count + 1
-					-- [病毒处决逻辑]
+					-- [病毒处决] 基于 max_health 判定
 					if e.state_custom_1 and e.max_health <= 80 then
 						e:Destroy(false)
 						perish_count = perish_count + 1
@@ -49,9 +45,8 @@ function package:init()
 
 		bugs.extra_data.unit_count = bot_count
 		bugs.extra_data.asset_count = total
-		print(string.format("[InsectLimit] Census -> REAL BOTS: %d | Total Assets: %d | Virus Culled: %d", bot_count, total, perish_count))
+		print(string.format("[InsectLimit] Heartbeat -> REAL BOTS: %d | Total Assets: %d | Virus Perished: %d", bot_count, total, perish_count))
 
-		-- 30秒心跳 (5 TPS * 30 = 150 ticks)
 		Map.Delay("DiagnosticHeartbeat", 150)
 	end
 
@@ -72,7 +67,13 @@ function package:init()
 		if target.stealth then return false end
 		if target.is_construction then return false end
 		if def.immortal then return false end
-		if def.is_explorable then return false end
+
+		-- 【v2.5.4 适配】：官方已修复玩家所属探索项的受击判定
+		-- 只有当探索项仍属于中立/世界势力时，才将其过滤掉，防止无意义堆积
+		if def.is_explorable and not target.faction.is_player_controlled then
+			return false
+		end
+
 		if def.size == "Mission" then return false end
 		if def.type == "DroppedItem" then return false end
 		if def.type == "Resource" then return false end
@@ -81,7 +82,7 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 3. 通用行为逻辑
+	-- 3. 通用行为逻辑 (含病毒致命处理)
 	---------------------------------------------------------------------------
 	local function BugAttackUpdate(self, comp, cause)
 		if not comp.faction.is_player_controlled then
@@ -209,7 +210,7 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 5. 侦察 AI (Faithful Original Behavior)
+	-- 5. 侦察 AI (半径 30 密度检查)
 	---------------------------------------------------------------------------
 	c_bug_harvest.on_update = function(self, comp, cause)
 		local owner, data = comp.owner, comp.extra_data
@@ -246,7 +247,7 @@ function package:init()
 			data.target = nil
 
 			local hive_count = 0
-			Map.FindClosestEntity(owner, 35, function(e)
+			Map.FindClosestEntity(owner, 30, function(e)
 				if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then
 					hive_count = hive_count + 1
 					if hive_count >= 2 then return true end
@@ -287,5 +288,5 @@ function package:init()
 	if data.components.c_larva_attack1 then data.components.c_larva_attack1.on_update = BugAttackUpdate end
 	if data.components.c_larva_attack2 then data.components.c_larva_attack2.on_update = BugAttackUpdate end
 
-	print("[InsectLimit] v2.5.2: Final Stability & Performance Aligned.")
+	print("[InsectLimit] v2.5.4: Aligned with official Explorable-Attack fix.")
 end
