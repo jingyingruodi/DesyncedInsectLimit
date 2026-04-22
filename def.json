@@ -3,7 +3,7 @@
 	"name": "虫群单位上限修改 (Insect Limit)",
 	"author": "镜影若滴",
 	"version_name": "2.7.21",
-	"version_code": 81,
+	"version_code": 82,
 	"description": "v2.7.21 阶段性完结稳定版。基于原版逻辑的深度优化：引入250格进攻距离截断解决跨图寻路性能黑洞；实现目标合法性筛选彻底杜绝蓝图聚怪；重构三路全局限速解耦提升并发灵敏度。上限配额严格按总玩家数扩展维持世界强度，频率按存活玩家数缩放保护UPS。全量中英双语注释。",
 	"packages": {
 		"InsectLimitAmin": {
