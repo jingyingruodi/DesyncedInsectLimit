@@ -1,42 +1,42 @@
-# 关于《Desynced》原版虫群 AI 逻辑缺陷及修复建议报告
-# Report on Original Swarm AI Defects and Fixes in Desynced
+# 关于《Desynced》原版虫群 AI 逻辑缺陷及修复建议报告 (v2.7.15)
+# Report on Swarm AI Defects and Enhancements in Desynced
 
 ---
 
 ## 中文版 (Chinese Version)
 
 ### 1. 目标合法性检查缺失 (Target Validity Issue)
-*   **缺陷**：原版 AI 在发起进攻时未对目标实体进行状态校验。它会错误地锁定“建筑蓝图 (Constructions)”、“可探索项 (Explorables)”或“掉落物 (Dropped Items)”作为主攻目标。由于这些实体无法被常规武器“消灭”，导致大量虫群单位在目标点堆积且不进入攻击循环，造成无意义的性能开销。
-*   **修复**：本模组引入了严格筛选机制，确保虫群仅针对已部署且非隐身的合法玩家实体发起入侵。
+*   **缺陷**：原版 AI 会锁定“建筑蓝图”、“可探索项”或“资源点”作为主攻目标。由于这些实体无法被摧毁，导致虫群在目标点堆积且不进入攻击循环，造成无意义的性能开销。
+*   **修复**：引入了严格筛选机制，确保虫群仅针对已部署且非隐身的合法玩家实体发起入侵。
 
-### 2. 隐身基地逃避判定 (Stealth Home Base Exploit)
-*   **缺陷**：原版逻辑强制锁定玩家阵营的 `home_entity`。若玩家将主基地隐身，虫群逻辑会因为目标“不可见”而导致整个阵营的入侵 AI 失效，即便周边有大量暴露的采集站或机器人。
-*   **修复**：重构逻辑后，当主基地隐身或不合法时，虫群会自动切换至“就近打击”模式，寻找附近可见的合法目标。
+### 2. 精准战斗判定与卡死处理 (Precise Combat Detection)
+*   **缺陷**：原版虫群在路经受阻或残血脱战后容易进入永久“发呆”状态。
+*   **修复**：本模组重构了 `on_update` 判定。只有当单位真正进行射击，或者本周期内血量确实减少时，才重置卡死计时。这确保了真正处于战斗中的单位不会被误判，而卡死或发呆的单位能及时解脱归巢。
 
-### 3. “千里奔袭”Bug (Long-Distance Trek Bug)
-*   **缺陷**：当蜂巢 250 格内出现任何玩家单位时会激活进攻，但目标会被硬性设定为玩家主基地。若主基地远在地图另一端，虫群会发起跨越全图的长途跋涉，导致严重的路径查找开销且进攻效率极低。
-*   **修复**：引入了 **250 格距离截断机制**。若目标基地超出此范围，虫子将直接转为打击诱发其活跃的周边单位，拒绝无效的远距离行军。
+### 3. 全局行为限速解耦 (Behavioral Decoupling)
+*   **缺陷**：原版（及本模组旧版）将侦察虫派遣、进攻波次、自然扩张共用同一个 `last_swarm` 全局冷却。这导致在大规模地图或多玩家环境下，虫群反应极度迟钝。
+*   **修复**：将三种核心行为的 Cooldown 完全分离（`last_attack` / `last_scout` / `last_nest`）。不同蜂巢可以同时执行不同任务，显著提升了 AI 的并行决策能力。
 
-### 4. 统计口径导致的生态位挤占 (Census Philosophy Issue)
-*   **缺陷**：原版逻辑在计算单位上限时，采用的是全量统计（虫穴 + 战斗单位）。这导致了一个逻辑悖论：建立的虫穴越多，剩余刷怪配额就越少。在大后期，密集的巢穴会挤占所有生成空间，导致虫群空有规模却无进攻力。
-*   **修复**：本模组上限**仅计算非建筑的活跃单位**。虫穴不应占用战斗配额，确保了无论虫群扩张到何种规模，始终能保持稳定的进攻烈度。
+### 4. 统计口径与生态位优化 (Census Philosophy)
+*   **缺陷**：原版计算上限时包含虫穴。导致虫穴越多，刷怪量越少。
+*   **修复**：上限仅计算非建筑的活跃战斗单位，确保无论虫群扩张到何种规模，始终能保持稳定的进攻烈度。
 
 ---
 
 ## English Version
 
 ### 1. Lack of Target Validity Filtering
-*   **Issue**: The vanilla AI fails to validate target entities before initiating an invasion. It often targets "Constructions (Blueprints)", "Explorables", or "Dropped Items". Since these cannot be "destroyed" by weapons, units pile up indefinitely at the location without entering combat cycles, causing significant performance degradation.
+*   **Issue**: Vanilla AI targets "Blueprints", "Explorables", or "Resources". Since these cannot be destroyed by weapons, units pile up indefinitely, causing performance degradation.
 *   **Fix**: Introduced a strict filtering mechanism to ensure the swarm only targets deployed, visible, and valid player entities.
 
-### 2. Stealth Home Base Exploit
-*   **Issue**: Vanilla logic hard-locks the player faction's `home_entity` as the primary target. If a player cloaks their base, the entire faction’s invasion AI effectively stalls, even if other units or bots are fully exposed nearby.
-*   **Fix**: Refactored the logic to fallback into "Nearby Attack" mode if the home base is cloaked or invalid, targeting the nearest visible player assets within 250 grids.
+### 2. Precise Combat Detection & Stuck-Recovery
+*   **Issue**: Units often enter a permanent "idle" state after combat or when pathing is blocked.
+*   **Fix**: Refactored the update logic. Stuck timers are only reset if a unit is actively firing or taking damage. This prevents active units from being misidentified as stuck while ensuring truly idle units return to hives or self-destruct to free up population slots.
 
-### 3. The "Long-Distance Trek" Bug
-*   **Issue**: Incursions are triggered when a player unit enters a 250-grid radius of a hive, but the AI hard-codes the target to the player's home base. If the base is far away, the swarm embarks on a map-wide march, leading to massive pathfinding overhead and zero tactical efficiency.
-*   **Fix**: Implemented a **250-grid distance truncation**. If the target base exceeds this range, the swarm immediately re-targets nearby assets that initially triggered the aggression.
+### 3. Global Behavioral Decoupling
+*   **Issue**: Sharing a single `last_swarm` timer for scouting, attacking, and expanding causes the swarm to be unresponsive in large-scale or multiplayer sessions.
+*   **Fix**: Decoupled the three core behaviors with independent global cooldowns (`last_attack`, `last_scout`, `last_nest`). This allows simultaneous activities across different hives, greatly enhancing the swarm's tactical flexibility.
 
 ### 4. Census Philosophy & Ecological Displacement
-*   **Issue**: Vanilla logic calculates the population limit using a "Total Assets" approach (Hives + Units). The more the swarm expands and builds hives, the less "quota" remains for spawning actual combat units. In late-game, dense hive clusters effectively choke out the spawn rate.
-*   **Fix**: The population limit in this mod **only applies to non-structure, active units**. Hives should not consume combat unit quotas, ensuring consistent offensive pressure regardless of the swarm's geographical footprint.
+*   **Issue**: Vanilla logic includes hives in the population count, meaning more expansion leads to fewer combat units.
+*   **Fix**: The population limit now only applies to active non-structure units, ensuring consistent offensive pressure regardless of the swarm's geographical footprint.

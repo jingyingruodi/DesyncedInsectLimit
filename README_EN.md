@@ -2,28 +2,27 @@
 
 An optimization mod designed to fix vanilla AI defects, optimize lifecycles, and introduce dynamic scaling based on active players.
 
-## 📖 Key Features (v2.7.2 Final)
+## 📖 Key Features (v2.7.15 Final Stable)
 
-### 1. Dynamic Expandable Limit System
-- **Adaptive Hard Cap**: Base 12,000 active combat units, with +3,000 for each **active player faction**.
-- **Dynamic Soft Limit**: Base 4,000 units, scales with player count; exceeds this and spawn rates are halved to maintain UPS.
-- **Dynamic Scout Threshold**: Base 6,000 units, ensuring consistent hive expansion in reasonable ranges.
-- **Status Broadcast**: The console now displays `Players: Alive/Total`, allowing for precise server load monitoring.
+### 1. Behavioral Decoupling Throttling System (New!)
+- **Triple Independent Cooldowns**: Fully decoupled the global cooldowns for "Dispatching Scouts", "Initiating Incursions", and "Natural Hive Expansion".
+- **Parallel Decision Making**: Different hives can now perform different tasks simultaneously, eliminating the sluggishness caused by a single shared global timer.
+- **Dynamic Scaling**: All throttling frequencies automatically scale based on the number of **active player factions**; more players mean a more aggressive swarm.
 
-### 2. Intelligent Expansion & Navigation Fixes
-- **Frontline Unit Locking**: Scouts no longer exclusively target the player's home base. They dynamically lock onto the **physically nearest** player unit for expansion, effectively countering "Mobile Base" evasion tactics.
-- **Beyond-Visual-Range (BVR) Navigation**: Unlocked scout pathing limits to support precise 700+ grid infiltrations, while combat swarms maintain a 250-grid truncation to protect performance.
-- **180s Scout Patience**: Increased the stuck timeout for scouts to 180 seconds (900 ticks), significantly improving the success rate of long-distance nesting missions around player fortifications.
+### 2. Dynamic Expandable Limit System
+- **Adaptive Hard Cap**: Base 12,000 active combat units, with +3,000 for each **active player**.
+- **Dynamic Soft Limit**: Base 4,000 units, scales with player count; exceeds this and spawn rates are halved to maintain server UPS.
+- **Status Broadcast**: Background logs now display real-time status: `Players: Alive/Total | BOTS: Current/Cap`.
 
-### 3. Lifecycle & Performance Optimization
-- **Efficient Scout Management**: Scouts are auto-destroyed after 180s if stuck and are strictly prohibited from returning to hives, freeing up slots for combat units.
-- **Anti-Cycle Homing Fix**: If a unit's path to a hive is blocked (e.g., by cliffs or walls), that hive is blacklisted for 250s, forcing the unit to find a different exit.
-- **30s Ultra-Efficient Census**: Uses 150-tick low-frequency caching, reducing unit counting overhead to O(1).
-- **Target Validity Enforcement**: Filters out blueprints, resource nodes, and neutral explorables at the logic level to prevent unit piling.
+### 3. Intelligent Expansion & Navigation Fixes
+- **Frontline Unit Locking**: Scouts dynamically lock onto the **physically nearest** player assets instead of just the home base, countering "Mobile Base" strategies.
+- **Precision Pathfinding**: Unlocked scout limits to support 700+ grid infiltrations with a 180s (900 ticks) stuck-tolerance mechanism.
+- **Anti-Cycle Homing Fix**: Blocked hive paths (cliffs/walls) trigger a 250s blacklist, forcing units to seek alternative routes.
 
-### 4. Production-Grade Stability
-- **Full Sovereignty Override**: Key spawning logic is rewritten to prevent interference from hidden vanilla variables.
-- **Bilingual Documentation**: Code is fully annotated in both Chinese and English for easier maintenance.
+### 4. Lifecycle & Performance Optimization
+- **Precise Combat Detection**: Reconfigured stuck-detection logic. Units only reset their stuck-timers when actually firing or taking damage, solving the "Idle at Low Health" bug where units would permanently occupy population slots.
+- **Target Validity Enforcement**: Filters out blueprints, resource nodes, and neutral explorables to prevent unit piling at invalid locations.
+- **30s Efficient Census**: Uses 150-tick low-frequency caching, maintaining O(1) complexity for unit counting.
 
 ## 🛠 Installation
 1. Place the mod folder into the game's `Content/mods/` directory.
