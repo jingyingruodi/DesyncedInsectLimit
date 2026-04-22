@@ -10,7 +10,7 @@ This mod enhances the swarm AI by fixing core logic defects, decoupling global d
 - **Strategic Scout Freedom**: While combat ranges are restricted, scouts retain full-map navigation (up to 700+ grids) to ensure natural expansion and strategic depth are maintained.
 
 ### 2. Target Validity Filtering (Anti-Piling Core)
-- **Blocked Invalid Targets**: Prevents vanilla AI from targeting blueprints, resource nodes, or neutral explorables. This eliminates the "unit piling" bug where swarms would cluster around indestructible targets and crash server performance.
+- **Blocked Invalid Targets**: Prevents vanilla AI from targeting blueprints. This eliminates the "unit piling" bug where swarms would cluster around indestructible targets and crash server performance.
 
 ### 3. Enhanced Homing & Pathing Stability
 - **Combat-Task Prioritization**: Replicated and refined the task-locking logic to correctly suppress nesting/homing while units are actively fighting or charging toward frontlines.
