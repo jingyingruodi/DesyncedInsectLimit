@@ -1,25 +1,24 @@
 # Desynced Insect Limit Mod
 
-An optimization mod designed to fix vanilla AI defects, optimize swarming lifecycles, and introduce dynamic scaling based on player activity.
+This mod enhances the swarm AI by fixing core logic defects, decoupling global decision-making, and introducing dynamic player-based scaling to improve late-game performance and multiplayer balance.
 
-## 📖 Key Features (v2.7.20 Aligned Final)
+## 📖 Key Enhancements (Compared to Vanilla)
 
-### 1. Behavioral Decoupling & Faithful Logic (New!)
-- **Triple Independent Cooldowns**: Fully decoupled the global cooldowns for "Scouting", "Attacking", and "Expansion". Hives can now perform these activities in parallel.
-- **Dynamic Player Scaling**: Throttling frequencies scale based on the number of **active players** (UPS protection), while population caps scale based on **total player count** (world difficulty persistence).
+### 1. Incursion Distance Truncation (Pathing Optimization)
+- **Eliminated Long-Distance Marching**: Fixed a vanilla defect where swarms would hard-lock onto the player's home base regardless of distance. In vanilla, if a unit enters a hive's range, the entire swarm might attempt to pathfind across thousands of grids, causing massive CPU overhead.
+- **250-Grid Smart Truncation**: This mod implements a 250-grid limit for combat incursions. If the target home base is beyond this range, the swarm automatically re-targets the **nearest visible player unit** instead.
+- **Strategic Scout Freedom**: While combat ranges are restricted, scouts retain full-map navigation (up to 700+ grids) to ensure natural expansion and strategic depth are maintained.
 
-### 2. Intelligent Expansion & Navigation Fixes
-- **Frontline Unit Locking**: Scouts dynamically lock onto the **physically nearest** player assets instead of just the home base, countering "Mobile Base" strategies.
-- **Precision Pathfinding**: Unlocked scout limits to support 700+ grid infiltrations with a 180s (900 ticks) stuck-tolerance mechanism.
-- **Anti-Cycle Homing Fix**: Blocked hive paths (cliffs/walls) trigger a 250s blacklist, forcing units to seek alternative routes.
+### 2. Target Validity Filtering (Anti-Piling Core)
+- **Blocked Invalid Targets**: Prevents vanilla AI from targeting blueprints, resource nodes, or neutral explorables. This eliminates the "unit piling" bug where swarms would cluster around indestructible targets and crash server performance.
 
-### 3. Lifecycle & Performance Optimization
-- **Precise Combat Detection**: Reconfigured stuck-detection logic. Units only reset their stuck-timers when actually firing or taking damage, solving the "Idle at Low Health" bug where units would permanently occupy population slots.
-- **Target Validity Enforcement**: Filters out blueprints, resource nodes, and neutral explorables to prevent unit piling at invalid locations.
-- **30s Efficient Census**: Uses 150-tick low-frequency caching, maintaining O(1) complexity for unit counting even with thousands of units.
+### 3. Enhanced Homing & Pathing Stability
+- **Combat-Task Prioritization**: Replicated and refined the task-locking logic to correctly suppress nesting/homing while units are actively fighting or charging toward frontlines.
+- **Improved Homing Responsiveness**: Reduced post-combat idle time and introduced smarter self-healing for units stuck near cliffs or player fortifications.
 
-### 4. Status Dashboard
-- **Real-time Monitoring**: The background log now displays a heartbeat every 30s: `Players: Active/Total | BOTS: Current/Cap | Assets: Total`.
+### 4. Decision Logic & Multiplayer Scaling
+- **Global Behavioral Decoupling**: Fully decoupled global cooldowns for scouting, attacking, and expansion, allowing hives to make independent decisions in parallel.
+- **Dynamic Dual-Scaling**: Population caps scale based on **Total Player Count** (persistence), while decision frequencies scale based on **Active Players** (UPS protection).
 
 ## 🛠 Installation
 1. Place the mod folder into the game's `Content/mods/` directory.
