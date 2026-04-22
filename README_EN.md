@@ -1,39 +1,33 @@
 # Desynced Insect Limit Mod
 
-This is an optimization mod designed to fix flaws in the vanilla logic and improve the multiplayer server experience by increasing the swarm cap.
+An optimization mod designed to fix vanilla AI defects, optimize lifecycles, and introduce dynamic scaling based on active players.
 
-## 📖 Background
-In Desynced's vanilla logic, the swarm has several AI defects (e.g., besieging blueprints, map-wide marches) and a very low global population limit (4,000 entities). In multiplayer, this shared limit results in an inactive swarm during late-game stages, significantly diminishing the challenge of defensive gameplay.
+## 📖 Key Features (v2.7.2 Final)
 
-## ✨ Features (v2.5.2)
-Rebuilt on a stable logic foundation, this mod achieves a perfect balance between intelligence and performance:
+### 1. Dynamic Expandable Limit System
+- **Adaptive Hard Cap**: Base 12,000 active combat units, with +3,000 for each **active player faction**.
+- **Dynamic Soft Limit**: Base 4,000 units, scales with player count; exceeds this and spawn rates are halved to maintain UPS.
+- **Dynamic Scout Threshold**: Base 6,000 units, ensuring consistent hive expansion in reasonable ranges.
+- **Status Broadcast**: The console now displays `Players: Alive/Total`, allowing for precise server load monitoring.
 
-- **AI Defect Fixes**:
-  - **Target Validity Verification**: Resolves the bug where swarms would endlessly attack "Blueprints", "Explorables", or "Dropped Items".
-  - **Stealth Adaptation**: If a player's home base is cloaked, the swarm intelligently shifts focus to nearby visible active units instead of idling.
-  - **Distance Truncation**: Fixes the "Long-Distance Trek" bug. If the primary target is too far (>250 grids), the swarm will attack the nearest player assets instead of marching across the entire map.
+### 2. Intelligent Expansion & Navigation Fixes
+- **Frontline Unit Locking**: Scouts no longer exclusively target the player's home base. They dynamically lock onto the **physically nearest** player unit for expansion, effectively countering "Mobile Base" evasion tactics.
+- **Beyond-Visual-Range (BVR) Navigation**: Unlocked scout pathing limits to support precise 700+ grid infiltrations, while combat swarms maintain a 250-grid truncation to protect performance.
+- **180s Scout Patience**: Increased the stuck timeout for scouts to 180 seconds (900 ticks), significantly improving the success rate of long-distance nesting missions around player fortifications.
 
-- **Extreme Performance Optimization**:
-  - **30s Global Census Heartbeat**: Implements a low-frequency statistical caching mechanism, reducing swarm counting overhead to O(1) complexity.
-  - **Sampled Target Search**: Hive targeting algorithms now use random sampling instead of full-map scans, significantly reducing server load.
+### 3. Lifecycle & Performance Optimization
+- **Efficient Scout Management**: Scouts are auto-destroyed after 180s if stuck and are strictly prohibited from returning to hives, freeing up slots for combat units.
+- **Anti-Cycle Homing Fix**: If a unit's path to a hive is blocked (e.g., by cliffs or walls), that hive is blacklisted for 250s, forcing the unit to find a different exit.
+- **30s Ultra-Efficient Census**: Uses 150-tick low-frequency caching, reducing unit counting overhead to O(1).
+- **Target Validity Enforcement**: Filters out blueprints, resource nodes, and neutral explorables at the logic level to prevent unit piling.
 
-- **Scale & Quota Enhancements**:
-  - **Limit Increase**: Maximum combat unit capacity raised to **30,000** active units.
-  - **Spawn Rate Retention**: The threshold where spawn rates begin to decline has been increased from 2,000 to **4,000**.
-  - **Expansion Policy**: The entity limit for dispatching scouts to build new hives has been increased to **10,000**.
-  - **Unit-Only Census Philosophy**: The limit **only counts active combat units**. Hive structures no longer consume the spawn quota, ensuring consistent offensive pressure as the swarm expands.
-  - **Automated Virus Recycling**: Refined the shutdown and perish countdown for low-tier infected units to auto-clear invalid entities.
-
-- **Server Compatibility**: Pure logic modification, fully compatible with Dedicated Servers and automatic synchronization.
+### 4. Production-Grade Stability
+- **Full Sovereignty Override**: Key spawning logic is rewritten to prevent interference from hidden vanilla variables.
+- **Bilingual Documentation**: Code is fully annotated in both Chinese and English for easier maintenance.
 
 ## 🛠 Installation
-1. Download the project files.
-2. Place the mod folder (or the packaged Zip compressed file) into the `Desynced/Content/mods/` directory.
-3. Enable the mod in the in-game Mod menu.
-
-## ⚠️ Notes
-- **TPS Adaptation**: Optimized specifically for the game's 5 TPS (5 ticks per second) environment.
-- **Performance Tip**: 30,000 is a theoretical maximum; actual performance depends on the server's CPU capability.
+1. Place the mod folder into the game's `Content/mods/` directory.
+2. Enable `InsectLimit` in the in-game Mod menu.
 
 ## 📄 License
-Licensed under the [MIT License](LICENSE).
+This project is open-source under the [MIT License](LICENSE).

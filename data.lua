@@ -1,5 +1,5 @@
 -- InsectLimit Mod - Performance & Intelligent Combat Fixes
--- Version: 2.6.9 (Complete Vanilla Pacing Fidelity)
+-- Version: 2.7.7 (Vanilla Aggression Fidelity & Scout Escape Logic)
 -- Author: 镜影若滴
 
 local package = ...
@@ -13,7 +13,7 @@ local function IsBugActiveSeason()
 	return math.abs(Map.GetYearSeason() - 0.5) < 0.25
 end
 
--- 目标合法性筛选器
+-- 【核心修复】：目标合法性筛选器
 local function IsAttackable(e)
 	if not e or not e.exists then return false end
 	local target = e.is_placed and e or e.docked_garage
@@ -31,6 +31,18 @@ local function IsAttackable(e)
 	return true
 end
 
+-- 获取玩家阵营统计
+local function GetPlayerStats()
+	local active_count, total_count = 0, 0
+	for _, faction in ipairs(Map.GetFactions()) do
+		if faction.is_player_controlled then
+			total_count = total_count + 1
+			if faction.num_entities > 0 then active_count = active_count + 1 end
+		end
+	end
+	return math.max(1, active_count), math.max(1, total_count)
+end
+
 ---------------------------------------------------------------------------
 -- 1. 全局普查系统 (Diagnostic Heartbeat)
 ---------------------------------------------------------------------------
@@ -40,16 +52,14 @@ function Delay.DiagnosticHeartbeat(arg)
 
 	local ents = bugs.entities
 	local total = #ents
-	local bot_count = 0
-	local perish_count = 0
+	local bot_count, perish_count = 0, 0
 
 	for i = 1, total do
 		local e = ents[i]
 		if e and e.exists then
-			-- 仅统计移动战斗单位
 			if e.has_movement and not e.is_construction then
 				bot_count = bot_count + 1
-				-- 自动清理无效感染单位
+				-- 自动清理低血量感染单位
 				if e.state_custom_1 and e.max_health <= 80 then
 					e:Destroy(false)
 					perish_count = perish_count + 1
@@ -58,25 +68,23 @@ function Delay.DiagnosticHeartbeat(arg)
 		end
 	end
 
-	-- 缓存数据
 	bugs.extra_data.unit_count = bot_count
 	bugs.extra_data.asset_count = total
 
-	-- 动态上限参数
-	local pc = Map.GetPlayerFactionCount and Map.GetPlayerFactionCount() or 1
-	local abs_limit = 12000 + (pc - 1) * 3000
-	local soft_limit = 4000 + (pc - 1) * 1500
-	local scout_limit = 6000 + (pc - 1) * 2000
+	local active_pc, total_pc = GetPlayerStats()
+	local abs_limit = 12000 + (active_pc - 1) * 3000
+	local soft_limit = 4000 + (active_pc - 1) * 1500
+	local scout_limit = 6000 + (active_pc - 1) * 2000
 
-	-- 播报
-	print(string.format("[InsectLimit] Heartbeat -> BOTS: %d/%d (Soft: %d, Scout: %d) | Assets: %d | Virus Perished: %d",
-		bot_count, abs_limit, soft_limit, scout_limit, total, perish_count))
+	-- 实时状态播报
+	print(string.format("[InsectLimit] Heartbeat -> Players: %d/%d | BOTS: %d/%d (Soft: %d, Scout: %d) | Assets: %d",
+		active_pc, total_pc, bot_count, abs_limit, soft_limit, scout_limit, total))
 
 	Map.Delay("DiagnosticHeartbeat", 150)
 end
 
 function package:init()
-	print("[InsectLimit] Initializing v2.6.9 - Total Vanilla Pacing Fidelity Deployed...")
+	print("[InsectLimit] Initializing v2.7.7 - Vanilla Aggression & Scout Escape Logic...")
 
 	local c_bug_spawn = data.components.c_bug_spawn
 	local c_bug_spawner_large = data.components.c_bug_spawner_large
@@ -89,12 +97,16 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 2. 进攻组件 Hook (侦察虫生命周期)
+	-- 2. 进攻组件 Hook (战斗状态保护 & 180s 侦察虫容错)
 	---------------------------------------------------------------------------
 	local function BugAttackUpdate(self, comp, cause)
 		if not comp.faction.is_player_controlled then
 			local owner, ed = comp.owner, comp.extra_data
 
+			-- 战斗保护：交火中不计时
+			if comp.is_working or owner.is_damaged then ed.failed_move_ticks = nil end
+
+			-- 病毒致命处决
 			if owner.state_custom_1 and owner.max_health <= 80 and not IsFlyingUnit(owner) then
 				if not ed.virus_marked_for_death then
 					ed.virus_marked_for_death = true
@@ -106,18 +118,17 @@ function package:init()
 				return true
 			end
 
+			-- 卡死判定
 			local is_stuck = (cause & CC_FINISH_MOVE ~= 0 and owner.state_path_blocked) or owner.state_custom_1
 			if is_stuck then
 				if not ed.failed_move_ticks then
-					ed.failed_move_ticks = Map.GetTick() + 600
+					ed.failed_move_ticks = Map.GetTick() + 900
 				elseif ed.failed_move_ticks < Map.GetTick() then
-					local stuck_ticks = 600 - (ed.failed_move_ticks - Map.GetTick())
-					-- 侦察虫卡死处决
-					if owner:FindComponent("c_bug_harvest") then
-						if stuck_ticks >= 300 then owner:Destroy(false) return else return true end
-					end
-
 					ed.failed_move_ticks = nil
+					-- 侦察虫卡死处决
+					if owner:FindComponent("c_bug_harvest") then owner:Destroy(false) return end
+
+					-- 战斗单位寻家
 					if not comp:RegisterIsLink(1) then comp:SetRegister(1, nil) end
 					if not owner:FindComponent("c_bug_homeless") then
 						Map.Defer(function()
@@ -136,158 +147,192 @@ function package:init()
 		return data.components.c_turret.on_update(self, comp, cause)
 	end
 
+	function Delay.BugForcePerish(arg)
+		local e = arg.entity
+		if e and e.exists then
+			if e.is_placed then e:PlayEffect("fx_digital") end
+			e:Destroy(false)
+		end
+	end
+
 	---------------------------------------------------------------------------
-	-- 3. 大型蜂巢核心逻辑 (严格遵循原版限速机制)
+	-- 3. 大型蜂巢逻辑 (动态 CD & 全图扩张指南针)
 	---------------------------------------------------------------------------
 	c_bug_spawner_large.on_update = function(self, comp, cause)
 		if comp.faction.is_player_controlled then return comp:SetStateSleep(10000) end
 
-		-- 【核心限速 A】：全局冷静期 (Global Silence)
-		-- 严格对齐原版 750 ticks 的全图公共 CD
+		local active_pc, _ = GetPlayerStats()
+		local scaled_cooldown = math.floor(750 / active_pc)
 		local last_swarm = Map.GetSave().last_swarm or 0
-		local time_since_swarm = Map.GetTick() - last_swarm
-		if time_since_swarm < 750 then
-			return comp:SetStateSleep(750 - time_since_swarm + 1)
+		local time_since_action = Map.GetTick() - last_swarm
+		if time_since_action < scaled_cooldown then
+			return comp:SetStateSleep(scaled_cooldown - time_since_action + 1)
 		end
 
 		local bugs_faction = GetBugsFaction()
 		local ed_faction = bugs_faction.extra_data
-
 		if not ed_faction.heartbeat_started then
 			ed_faction.heartbeat_started = true
 			Map.Delay("DiagnosticHeartbeat", 10)
 		end
 
-		-- 获取动态上限 (统统按照战斗单位算)
-		local pc = Map.GetPlayerFactionCount and Map.GetPlayerFactionCount() or 1
-		local abs_limit = 12000 + (pc - 1) * 3000
-		local scout_limit = 6000 + (pc - 1) * 2000
+		local abs_limit = 12000 + (active_pc - 1) * 3000
+		local scout_limit = 6000 + (active_pc - 1) * 2000
 		local unit_count = ed_faction.unit_count or 0
 
-		-- 兵力饱和判定
 		if unit_count > abs_limit then return comp:SetStateSleep(5000) end
 
-		-- 【核心限速 B】：个体预热计数器 (Individual Warm-up)
-		-- 每个蜂巢必须独立完成 10 次成功心跳
 		local ed_hive = comp.extra_data
 		if not ed_hive.extra_spawned then ed_hive.extra_spawned = 0 end
 		ed_hive.extra_spawned = ed_hive.extra_spawned + 1
 
 		if ed_hive.extra_spawned > 10 then
-			local rnd = math.random()
+			local closest_dist_any, closest_dist_250 = 9999999, 9999999
+			local towards_any, towards_250 = nil, nil
+			local closest_faction_250 = nil
 
-			--行为分支 1：自我扩张（建立新的近程虫穴）
-			if rnd < 0.2 then
-				local hive_count = 0
-				Map.FindClosestEntity(comp.owner, 10, function(e)
-					if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then hive_count = hive_count + 1 end
-				end, FF_OPERATING | FF_OWNFACTION)
-
-				if hive_count < 5 then
-					Map.Defer(function()
-						if comp.exists then
-							local newhome = Map.CreateEntity(bugs_faction, "f_bug_hive")
-							newhome:Place(comp.owner.location)
-							ed_hive.extra_spawned = 0
-						end
-					end)
-				end
-
-			-- 行为分支 2：远距离派遣或局部进攻
-			elseif rnd > 0.3 then
-				-- 目标搜索
-				local closest_dist_any, closest_dist_250 = 9999999, 9999999
-				local towards_any, towards_250 = nil, nil
-				local closest_faction_250 = nil
-
-				for _, faction in ipairs(Map.GetFactions()) do
-					if faction.is_player_controlled and faction.num_entities > 0 and bugs_faction:GetTrust(faction) == "ENEMY" then
-						local entities = faction.entities
-						local test_unit, tries = nil, 0
-						while tries < 15 do
-							local ent = entities[math.random(1, #entities)]
-							if ent and ent.exists and IsAttackable(ent) then test_unit = ent break end
-							tries = tries + 1
-						end
-						if test_unit then
-							local d = comp.owner:GetRangeTo(test_unit)
-							if d < closest_dist_any then closest_dist_any, towards_any = d, test_unit end
-							if d < 250 and d < closest_dist_250 then
-								closest_dist_250, towards_250, closest_faction_250 = d, test_unit, faction
-							end
-						end
+			for _, faction in ipairs(Map.GetFactions()) do
+				if faction.is_player_controlled and faction.num_entities > 0 and bugs_faction:GetTrust(faction) == "ENEMY" then
+					local entities = faction.entities
+					local test_unit, tries = nil, 0
+					while tries < 15 do
+						local ent = entities[math.random(1, #entities)]
+						if ent and ent.exists and IsAttackable(ent) then test_unit = ent break end
+						tries = tries + 1
 					end
-				end
-
-				-- 扩张判定 (使用向导)
-				if unit_count < scout_limit and towards_any and closest_dist_any > 100 then
-					if math.random() > 0.6 then
-						Map.Defer(function() if not comp.owner.exists then return end
-							local scout = Map.CreateEntity(bugs_faction, "f_triloscout")
-							scout:Place(comp.owner)
-							local h = scout:FindComponent("c_bug_harvest")
-							if h then
-								h.extra_data.home = comp.owner
-								h.extra_data.towards = Tool.Copy(towards_any.location)
-							end
-						end)
-					end
-					ed_hive.extra_spawned = 0
-					-- 只有在尝试扩张后更新全局 last_swarm，并进入长眠
-					Map.GetSave().last_swarm = Map.GetTick()
-					return comp:SetStateSleep(math.random(4000, 8000))
-
-				-- 入侵判定
-				elseif closest_faction_250 then
-					local settings = Map.GetSettings()
-					if (settings.peaceful == 3 or closest_dist_250 <= 60) and closest_dist_250 < 250 then
-						if not IsBugActiveSeason() and math.random() > 0.1 then return comp:SetStateSleep(math.random(2000, 4000)) end
-						local attack_target = closest_faction_250.home_entity
-						if not IsAttackable(attack_target) or comp.owner:GetRangeTo(attack_target) > 250 then
-							attack_target = towards_250
-						end
-						if attack_target and attack_target.exists then
-							Map.GetSave().last_swarm = Map.GetTick()
-							Map.Defer(function() if comp.exists and attack_target.exists then
-								data.components.c_bug_spawn:on_trigger_action(comp, attack_target, true)
-								ed_hive.extra_spawned = 0
-							end end)
+					if test_unit then
+						local d = comp.owner:GetRangeTo(test_unit)
+						if d < closest_dist_any then closest_dist_any, towards_any = d, test_unit end
+						if d < 250 and d < closest_dist_250 then
+							closest_dist_250, towards_250, closest_faction_250 = d, test_unit, faction
 						end
 					end
 				end
 			end
-		end
 
-		-- 常规轮询频率，对齐原版
+			-- 侦察派遣
+			if unit_count < scout_limit and towards_any and closest_dist_any > 100 then
+				if math.random() > 0.6 then
+					Map.Defer(function() if not comp.owner.exists then return end
+						local scout = Map.CreateEntity(bugs_faction, "f_triloscout")
+						scout:Place(comp.owner)
+						local h = scout:FindComponent("c_bug_harvest")
+						if h then
+							h.extra_data.home = comp.owner
+							h.extra_data.towards = Tool.Copy(towards_any.location)
+						end
+					end)
+				end
+				ed_hive.extra_spawned = 0
+				Map.GetSave().last_swarm = Map.GetTick()
+				return comp:SetStateSleep(math.random(4000, 8000))
+
+			-- 局部入侵
+			elseif closest_faction_250 then
+				local settings = Map.GetSettings()
+				if (settings.peaceful == 3 or closest_dist_250 <= 60) then
+					if not IsBugActiveSeason() and math.random() > 0.1 then return comp:SetStateSleep(math.random(2000, 4000)) end
+					local attack_target = closest_faction_250.home_entity
+					if not IsAttackable(attack_target) or comp.owner:GetRangeTo(attack_target) > 250 then
+						attack_target = towards_250
+					end
+					if attack_target and attack_target.exists then
+						Map.GetSave().last_swarm = Map.GetTick()
+						Map.Defer(function() if comp.exists and attack_target.exists then
+							data.components.c_bug_spawn:on_trigger_action(comp, attack_target, true)
+							ed_hive.extra_spawned = 0
+						end end)
+					end
+				end
+			end
+		end
 		return comp:SetStateSleep(math.random(300, 600))
 	end
 
 	---------------------------------------------------------------------------
-	-- 4. 软上限削弱 Hook
-	---------------------------------------------------------------------------
-	local old_spawn_action = c_bug_spawn.on_trigger_action
-	c_bug_spawn.on_trigger_action = function(self, comp, target, force)
-		local unit_count = GetBugsFaction().extra_data.unit_count or 0
-		local pc = Map.GetPlayerFactionCount and Map.GetPlayerFactionCount() or 1
-		local soft_limit = 4000 + (pc - 1) * 1500
-		if unit_count > soft_limit then force = false end
-		return old_spawn_action(self, comp, target, force)
-	end
-
-	---------------------------------------------------------------------------
-	-- 5. 归巢管理 (侦察虫处决)
+	-- 4. 归巢逻辑增强 (智能重选 & 筑巢果断性修复)
 	---------------------------------------------------------------------------
 	local c_bug_homeless = data.components.c_bug_homeless
 	if c_bug_homeless then
 		local old_homeless_update = c_bug_homeless.on_update
 		c_bug_homeless.on_update = function(self, comp, cause)
-			if comp.owner:FindComponent("c_bug_harvest") then comp.owner:Destroy(false) return end
-			return old_homeless_update(self, comp, cause)
+			local owner, ed = comp.owner, comp.extra_data
+			if owner:FindComponent("c_bug_harvest") then owner:Destroy(false) return end
+
+			-- 【核心修复】：实时校验当前家。如果当前锁定的家满了，立刻换家，不准死守门口
+			local currHome = owner:GetRegisterEntity(FRAMEREG_GOTO)
+			if currHome then
+				local is_full = true
+				if currHome.exists and currHome.faction.id == "bugs" then
+					for _, v in ipairs(currHome.slots) do
+						if v.type == "bughole" and v.entity == nil then is_full = false break end
+					end
+				end
+				if is_full then
+					owner:SetRegister(FRAMEREG_GOTO, nil)
+					currHome = nil
+				end
+			end
+
+			-- 对接成功重置记录
+			if owner.is_docked then
+				ed.bad_homes, ed.penalty_level = nil, nil
+				Map.Defer(function() if comp.exists then comp:Destroy() end end)
+				return
+			end
+
+			-- 路径阻断黑名单 (仅针对 >5格外的死路)
+			if owner.state_path_blocked then
+				local target_home = owner:GetRegisterEntity(FRAMEREG_GOTO)
+				if target_home and target_home.faction.id == "bugs" then
+					if owner:GetRangeTo(target_home) >= 5 then
+						ed.bad_homes = ed.bad_homes or {}
+						ed.bad_homes[target_home.key] = Map.GetTick() + 1250
+						owner:SetRegister(FRAMEREG_GOTO, nil)
+					end
+				end
+			end
+
+			if owner:GetRegisterEntity(FRAMEREG_GOTO) then return comp:SetStateSleep(30) end
+
+			-- 【找家策略】：寻找15格内“有空位且可抵达”的蜂巢
+			local newhome = Map.FindClosestEntity(owner, 15, function(e)
+				if (e.id == "f_bug_hive" or e.id == "f_bug_hive_large") then
+					if ed.bad_homes and ed.bad_homes[e.key] and ed.bad_homes[e.key] > Map.GetTick() then return false end
+					for _, v in ipairs(e.slots) do
+						if v.type == "bughole" and v.entity == nil then return true end
+					end
+				end
+			end, FF_OPERATING | FF_OWNFACTION)
+
+			if newhome then
+				owner:SetRegisterEntity(FRAMEREG_GOTO, newhome)
+				return comp:SetStateSleep(20)
+			end
+
+			-- 【筑巢逻辑还原】：若周围 15 格完全找不到“可进的家”，果断筑巢，不再原地发呆
+			if ed.extrawait then ed.extrawait = nil return comp:SetStateSleep(math.random(10, 40)) end
+
+			local foundlarge = Map.FindClosestEntity(owner, 8, function(e) return e.id == "f_bug_hive_large" end, FF_OWNFACTION)
+			Map.Defer(function()
+				if comp.exists then
+					-- 通知邻居等待，防止重叠 (Vanilla extrawait)
+					Map.FindClosestEntity(owner, 4, function(friend)
+						local c = friend:FindComponent("c_bug_homeless")
+						if c then c.extra_data.extrawait = true end
+					end, FF_OPERATING | FF_OWNFACTION)
+					local hive_type = (math.random() > 0.8 and not foundlarge) and "f_bug_hive_large" or "f_bug_hive"
+					local home = Map.CreateEntity(GetBugsFaction(), hive_type)
+					home:Place(owner.location)
+					owner:SetRegisterEntity(FRAMEREG_GOTO, home)
+					comp:Destroy()
+				end
+			end)
 		end
 	end
 
 	---------------------------------------------------------------------------
-	-- 6. 侦察 AI (同步官方原版 30格密度)
+	-- 5. 侦察 AI (增强游荡范围，避免夹击卡死)
 	---------------------------------------------------------------------------
 	c_bug_harvest.on_update = function(self, comp, cause)
 		local owner, data = comp.owner, comp.extra_data
@@ -309,6 +354,7 @@ function package:init()
 		elseif state == "deploy" then
 			if not owner.state_path_blocked then if comp:RequestStateMove(target, 3) then return end end
 			data.target = nil
+			-- 【扩张修复】：调回官方原版密度标准：30格内若巢穴少于2个，允许筑巢
 			local hive_count = 0
 			Map.FindClosestEntity(owner, 30, function(e)
 				if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then hive_count = hive_count + 1 if hive_count >= 2 then return true end end
@@ -326,22 +372,24 @@ function package:init()
 			local loc = Tool.Copy(owner.location)
 			if data.towards and (data.towards.x ~= 0 or data.towards.y ~= 0) then
 				local tloc = data.towards
-				local dx = math.min(math.max((tloc.x - loc.x) // 3, -50), 50)
-				local dy = math.min(math.max((tloc.y - loc.y) // 3, -50), 50)
-				loc.x, loc.y = loc.x + dx + math.random(-5, 5), loc.y + dy + math.random(-5, 5)
+				-- 【引导优化】：步长提升，模拟大跨度侦察
+				local dx = math.min(math.max((tloc.x - loc.x) // 3, -80), 80)
+				local dy = math.min(math.max((tloc.y - loc.y) // 3, -80), 80)
+				loc.x, loc.y = loc.x + dx + math.random(-10, 10), loc.y + dy + math.random(-10, 10)
 			else
-				loc.x, loc.y = loc.x + math.random(-15, 15), loc.y + math.random(-15, 15)
+				-- 【脱困优化】：随机游荡半径提升至 30 格，帮助虫子跳出蜂巢夹击区域
+				loc.x, loc.y = loc.x + math.random(-30, 30), loc.y + math.random(-30, 30)
 			end
 			data.state = "idle"
 			return comp:RequestStateMove(loc, 1)
 		end
 	end
 
-	-- Apply hooks
+	-- Apply All Hooks
 	c_trilobyte_attack.on_update = BugAttackUpdate
 	if data.components.c_tetrapuss_attack1 then data.components.c_tetrapuss_attack1.on_update = BugAttackUpdate end
 	if data.components.c_larva_attack1 then data.components.c_larva_attack1.on_update = BugAttackUpdate end
 	if data.components.c_larva_attack2 then data.components.c_larva_attack2.on_update = BugAttackUpdate end
 
-	print("[InsectLimit] v2.6.9: Vanilla Fidelity Gained. Global Throttling active.")
+	print("[InsectLimit] v2.7.7: Expansion Logic Refined & Stuck-Breaker Enhanced.")
 end
