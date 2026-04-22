@@ -6,7 +6,6 @@ An optimization mod designed to fix vanilla AI defects, optimize swarming lifecy
 
 ### 1. Behavioral Decoupling & Faithful Logic (New!)
 - **Triple Independent Cooldowns**: Fully decoupled the global cooldowns for "Scouting", "Attacking", and "Expansion". Hives can now perform these activities in parallel.
-- **Combat-Priority Homing**: Fixed the critical bug where units would return home immediately after spawning. Units now prioritize combat; nesting and homing logic are strictly suppressed while a unit is actively fighting or moving towards a target, perfectly aligned with vanilla behavior.
 - **Dynamic Player Scaling**: Throttling frequencies scale based on the number of **active players** (UPS protection), while population caps scale based on **total player count** (world difficulty persistence).
 
 ### 2. Intelligent Expansion & Navigation Fixes
