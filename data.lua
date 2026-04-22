@@ -1,5 +1,5 @@
 -- InsectLimit Mod - Performance & Intelligent Combat Fixes
--- Version: 2.7.15 (Stable Final - Multilateral Alignment)
+-- Version: 2.7.20 (Faithful Behavioral Logic & Conflict Fix)
 -- Author: 镜影若滴
 
 local package = ...
@@ -84,7 +84,6 @@ function Delay.DiagnosticHeartbeat(arg)
 end
 
 -- 【关键机制】：病毒致死处决执行器
--- 执行由 BugAttackUpdate 发起的延迟销毁请求
 function Delay.BugForcePerish(arg)
 	local e = arg.entity
 	if e and e.exists then
@@ -94,7 +93,7 @@ function Delay.BugForcePerish(arg)
 end
 
 function package:init()
-	print("[InsectLimit] Initializing v2.7.15 Final - Multilateral Alignment Deployed...")
+	print("[InsectLimit] Initializing v2.7.20 - Aligned with Vanilla Behavioral Logic...")
 
 	local components = data.components
 	local c_bug_spawn = components.c_bug_spawn
@@ -115,8 +114,6 @@ function package:init()
 			local owner, ed = comp.owner, comp.extra_data
 
 			-- 【核心修复】：精准战斗判定
-			-- 只有当正在射击，或者本周期内血量确实减少时，才重置卡死计时。
-			-- 解决了“血量未满但已脱离战斗”的单位永久卡死的问题。
 			local current_health = owner.health
 			local took_damage = ed.last_health and (current_health < ed.last_health)
 			if comp.is_working or took_damage then
@@ -124,7 +121,7 @@ function package:init()
 			end
 			ed.last_health = current_health
 
-			-- 病毒处决判定
+			-- 病毒处决
 			if owner.state_custom_1 and owner.max_health <= 80 and not IsFlyingUnit(owner) then
 				if not ed.virus_marked_for_death then
 					ed.virus_marked_for_death = true
@@ -136,21 +133,21 @@ function package:init()
 				return true
 			end
 
-			-- 卡死判定
+			-- 卡死判定 (含 180s 侦察虫容错机制)
 			local is_stuck = (cause & CC_FINISH_MOVE ~= 0 and owner.state_path_blocked) or owner.state_custom_1
 			if is_stuck then
 				if not ed.failed_move_ticks then
 					ed.failed_move_ticks = Map.GetTick() + 600
 				elseif ed.failed_move_ticks < Map.GetTick() then
 					ed.failed_move_ticks = nil
-					-- 侦察虫直接销毁
+					-- 侦察虫自毁
 					if owner:FindComponent("c_bug_harvest") then owner:Destroy(false) return end
 
-					-- 战斗单位解脱并归巢
+					-- 战斗单位解脱并寻找新家
 					if not comp:RegisterIsLink(1) then comp:SetRegister(1, nil) end
 					if not owner:FindComponent("c_bug_homeless") then
 						Map.Defer(function()
-							if comp.exists then
+							if comp.exists and not owner:FindComponent("c_bug_homeless") then
 								local new_homeless = (owner.health > 200) and owner:AddComponent("c_bug_homeless")
 								if new_homeless then new_homeless:Activate() else owner:Destroy() end
 							end
@@ -166,21 +163,20 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 3. 大型蜂巢逻辑 (三路解耦限速通道)
+	-- 3. 大型蜂巢逻辑 (三项独立限速通道)
 	---------------------------------------------------------------------------
 	c_bug_spawner_large.on_update = function(self, comp, cause)
 		if comp.faction.is_player_controlled then return comp:SetStateSleep(10000) end
 
 		local bugs_f = GetBugsFaction()
-		local ed_f = bugs_f.extra_data
-		if not ed_f.heartbeat_started then
-			ed_f.heartbeat_started = true
+		if not bugs_f.extra_data.heartbeat_started then
+			bugs_f.extra_data.heartbeat_started = true
 			Map.Delay("DiagnosticHeartbeat", 10)
 		end
 
 		local active_pc, total_pc = GetPlayerStats()
 		local scaled_cd = math.floor(750 / active_pc)
-		local unit_count = ed_f.unit_count or 0
+		local unit_count = bugs_f.extra_data.unit_count or 0
 		local abs_limit = 12000 + (total_pc - 1) * 3000
 		local scout_limit = 6000 + (active_pc - 1) * 2000
 
@@ -190,7 +186,6 @@ function package:init()
 		if not ed_hive.extra_spawned then ed_hive.extra_spawned = 0 end
 		ed_hive.extra_spawned = ed_hive.extra_spawned + 1
 
-		-- 【个体预热】：每个蜂巢必须经过积蓄期
 		if ed_hive.extra_spawned > 10 then
 			local tick = Map.GetTick()
 			local save = Map.GetSave()
@@ -258,7 +253,7 @@ function package:init()
 				end
 			end
 
-			-- ---【全局通道 3】：蜂巢自然扩张 (Nest) ---
+			-- ---【全局通道 3】：随机蜂巢自然扩张 ---
 			if (tick - (save.last_nest_tick or 0)) > (scaled_cd * 1.5) then
 				if rnd < 0.2 then
 					local hivecount = 0
@@ -285,7 +280,7 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 4. 归巢逻辑 (并发限流)
+	-- 4. 归巢逻辑优化 (复刻原版：战斗状态避让锁)
 	---------------------------------------------------------------------------
 	local c_bug_homeless = components.c_bug_homeless
 	if c_bug_homeless then
@@ -293,7 +288,19 @@ function package:init()
 			local owner, ed = comp.owner, comp.extra_data
 			if owner:FindComponent("c_bug_harvest") then owner:Destroy(false) return end
 
-			-- 【目标重选】：巢穴满员时重选
+			-- 【核心复刻】：战斗状态避让锁
+			-- 只有当单位处于非战斗状态（无目标、未工作、且已到达目标点）时才允许找家
+			local attack_comp = owner:FindComponent("c_turret", true)
+			if attack_comp and not owner.state_path_blocked then
+				local ent = attack_comp:GetRegisterEntity(1) or attack_comp:GetRegisterEntity(2)
+				local coord = attack_comp:GetRegisterCoord(1)
+				if attack_comp.is_working or ent or (coord and not owner:IsInRangeOf(coord, 5)) then
+					-- 正在执行任务中，归巢逻辑强制进入长休眠
+					return comp:SetStateSleep(300)
+				end
+			end
+
+			-- 目标重选
 			local currHome = owner:GetRegisterEntity(FRAMEREG_GOTO)
 			if currHome then
 				local has_slot = false
@@ -334,7 +341,7 @@ function package:init()
 
 			if newhome then owner:SetRegisterEntity(FRAMEREG_GOTO, newhome) return comp:SetStateSleep(20) end
 
-			-- 【筑巢速率限制】：每 Tick 2个名额
+			-- 筑巢速率限制
 			local tick = Map.GetTick()
 			local bed = GetBugsFaction().extra_data
 			if bed.last_nest_tick_homeless == tick then
@@ -430,5 +437,5 @@ function package:init()
 	}
 	for _, n in ipairs(hooks) do if components[n] then components[n].on_update = BugAttackUpdate end end
 
-	print("[InsectLimit] v2.7.15 Final - Faithful Multi-Alignment Active.")
+	print("[InsectLimit] v2.7.20 Aligned Final - Faithful Behavioral Logic Active.")
 end
