@@ -2,9 +2,9 @@
 	"id": "InsectLimit",
 	"name": "虫群单位上限修改 (Insect Limit)",
 	"author": "镜影若滴",
-	"version_name": "2.7.15",
-	"version_code": 75,
-	"description": "v2.7.15 阶段性稳定版。核心突破：实现派遣、进攻、扩张行为的全局解耦限速，大幅提升多人环境下 AI 并发决策灵敏度。引入基于存活玩家的动态权重系统，自适应调整频率。上限严格按总玩家数扩展，确保世界强度。含精准战斗判定修复、超视距导航及归巢死循环深度优化。全量中英双语注释。",
+	"version_name": "2.7.21",
+	"version_code": 81,
+	"description": "v2.7.21 深度逻辑对齐版。修正了统计口径：绝对上限、生产削弱线与侦察上限均按总玩家数（Total Players）扩展，确保世界强度恒定；同时实现派遣、进攻、扩张频率按活跃玩家数（Active Players）动态限速，极致优化多人服务器UPS。深度复刻原版战斗避让逻辑，解决波次单位逻辑冲突。全量中英双语注释。",
 	"packages": {
 		"InsectLimitAmin": {
 			"name": "InsectLimitAmin",

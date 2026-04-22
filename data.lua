@@ -1,5 +1,5 @@
 -- InsectLimit Mod - Performance & Intelligent Combat Fixes
--- Version: 2.7.20 (Faithful Behavioral Logic & Conflict Fix)
+-- Version: 2.7.21 (Logic Alignment: Total vs Active Players)
 -- Author: 镜影若滴
 
 local package = ...
@@ -72,12 +72,16 @@ function Delay.DiagnosticHeartbeat(arg)
 	bugs.extra_data.asset_count = total
 
 	local active_pc, total_pc = GetPlayerStats()
+
+	-- 【逻辑对齐】：
+	-- 上限配额 (Capacities) 统一按总人数 (total_pc) 计算。
+	-- 性能阈值 (Throttling) 统一按存活人数 (active_pc) 计算。
 	local abs_limit = 12000 + (total_pc - 1) * 3000
 	local soft_limit = 4000 + (active_pc - 1) * 1500
 	local scout_limit = 6000 + (active_pc - 1) * 2000
 
 	-- 播报
-	print(string.format("[InsectLimit] Heartbeat -> Players: %d/%d | BOTS: %d/%d (Soft: %d, Scout: %d) | Assets: %d",
+	print(string.format("[InsectLimit] Heartbeat -> Players: %d/%d (Alive/Total) | BOTS: %d/%d (Soft: %d, Scout: %d) | Assets: %d",
 		active_pc, total_pc, bot_count, abs_limit, soft_limit, scout_limit, total))
 
 	Map.Delay("DiagnosticHeartbeat", 150)
@@ -93,7 +97,7 @@ function Delay.BugForcePerish(arg)
 end
 
 function package:init()
-	print("[InsectLimit] Initializing v2.7.20 - Aligned with Vanilla Behavioral Logic...")
+	print("[InsectLimit] Initializing v2.7.21 Final - Multi-Dimensional Scaling Deployed...")
 
 	local components = data.components
 	local c_bug_spawn = components.c_bug_spawn
@@ -133,17 +137,14 @@ function package:init()
 				return true
 			end
 
-			-- 卡死判定 (含 180s 侦察虫容错机制)
+			-- 卡死判定
 			local is_stuck = (cause & CC_FINISH_MOVE ~= 0 and owner.state_path_blocked) or owner.state_custom_1
 			if is_stuck then
 				if not ed.failed_move_ticks then
 					ed.failed_move_ticks = Map.GetTick() + 600
 				elseif ed.failed_move_ticks < Map.GetTick() then
 					ed.failed_move_ticks = nil
-					-- 侦察虫自毁
 					if owner:FindComponent("c_bug_harvest") then owner:Destroy(false) return end
-
-					-- 战斗单位解脱并寻找新家
 					if not comp:RegisterIsLink(1) then comp:SetRegister(1, nil) end
 					if not owner:FindComponent("c_bug_homeless") then
 						Map.Defer(function()
@@ -175,10 +176,12 @@ function package:init()
 		end
 
 		local active_pc, total_pc = GetPlayerStats()
+		-- 频率锁基于存活玩家 (active_pc)，保护服务器性能
 		local scaled_cd = math.floor(750 / active_pc)
 		local unit_count = bugs_f.extra_data.unit_count or 0
+		-- 容量锁基于总玩家 (total_pc)，维持世界强度
 		local abs_limit = 12000 + (total_pc - 1) * 3000
-		local scout_limit = 6000 + (active_pc - 1) * 2000
+		local scout_limit = 6000 + (total_pc - 1) * 2000
 
 		if unit_count > abs_limit then return comp:SetStateSleep(5000) end
 
@@ -191,8 +194,7 @@ function package:init()
 			local save = Map.GetSave()
 			local rnd = math.random()
 
-			-- 预查最近玩家目标
-			local closest_dist_any, closest_dist_250 = 9999999, 9999999
+			local dist_any, dist_250 = 9999999, 9999999
 			local towards_any, towards_250, closest_faction_250 = nil, nil, nil
 
 			for _, faction in ipairs(Map.GetFactions()) do
@@ -206,17 +208,15 @@ function package:init()
 					end
 					if test_unit then
 						local d = comp.owner:GetRangeTo(test_unit)
-						if d < closest_dist_any then closest_dist_any, towards_any = d, test_unit end
-						if d < 250 and d < closest_dist_250 then
-							closest_dist_250, towards_250, closest_faction_250 = d, test_unit, faction
-						end
+						if d < dist_any then dist_any, towards_any = d, test_unit end
+						if d < 250 and d < dist_250 then dist_250, towards_250, closest_faction_250 = d, test_unit, faction end
 					end
 				end
 			end
 
-			-- ---【全局通道 1】：派遣侦察虫 ---
+			-- ---【1】：派遣侦察虫 (基于活跃人数频率) ---
 			if (tick - (save.last_scout_tick or 0)) > scaled_cd then
-				if unit_count < scout_limit and towards_any and closest_dist_any > 100 then
+				if unit_count < scout_limit and towards_any and dist_any > 100 then
 					if rnd > 0.6 then
 						save.last_scout_tick = tick
 						ed_hive.extra_spawned = 0
@@ -231,21 +231,19 @@ function package:init()
 				end
 			end
 
-			-- ---【全局通道 2】：发起进攻 ---
+			-- ---【2】：发起进攻 (基于活跃人数频率) ---
 			if (tick - (save.last_attack_tick or 0)) > (scaled_cd * 0.8) then
 				if closest_faction_250 then
 					local settings = Map.GetSettings()
-					if (settings.peaceful == 3 or closest_dist_250 <= 60) then
+					if (settings.peaceful == 3 or dist_250 <= 60) then
 						if not IsBugActiveSeason() and rnd > 0.1 then return comp:SetStateSleep(math.random(2000, 4000)) end
-						local attack_target = closest_faction_250.home_entity
-						if not IsAttackable(attack_target) or comp.owner:GetRangeTo(attack_target) > 250 then
-							attack_target = towards_250
-						end
-						if attack_target and attack_target.exists then
+						local target = closest_faction_250.home_entity
+						if not IsAttackable(target) or comp.owner:GetRangeTo(target) > 250 then target = towards_250 end
+						if target and target.exists then
 							save.last_attack_tick = tick
 							ed_hive.extra_spawned = 0
-							Map.Defer(function() if comp.exists and attack_target.exists then
-								data.components.c_bug_spawn:on_trigger_action(comp, attack_target, true)
+							Map.Defer(function() if comp.exists and target.exists then
+								data.components.c_bug_spawn:on_trigger_action(comp, target, true)
 							end end)
 							return comp:SetStateSleep(math.random(2000, 4000))
 						end
@@ -253,23 +251,17 @@ function package:init()
 				end
 			end
 
-			-- ---【全局通道 3】：随机蜂巢自然扩张 ---
+			-- ---【3】：蜂巢扩张 (基于活跃人数频率) ---
 			if (tick - (save.last_nest_tick or 0)) > (scaled_cd * 1.5) then
 				if rnd < 0.2 then
-					local hivecount = 0
 					local found = Map.FindClosestEntity(comp.owner, 10, function(e)
-						if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then
-							hivecount = hivecount + 1
-							if hivecount >= 5 then return true end
-						end
+						if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then return true end
 					end, FF_OPERATING|FF_OWNFACTION)
-
 					if not found then
 						save.last_nest_tick = tick
 						ed_hive.extra_spawned = 0
 						Map.Defer(function() if comp.exists then
-							local newhome = Map.CreateEntity(bugs_f, "f_bug_hive")
-							newhome:Place(comp.owner.location)
+							Map.CreateEntity(bugs_f, "f_bug_hive"):Place(comp.owner.location)
 						end end)
 						return comp:SetStateSleep(math.random(1000, 2000))
 					end
@@ -280,7 +272,7 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 4. 归巢逻辑优化 (复刻原版：战斗状态避让锁)
+	-- 4. 归巢逻辑优化 (复刻原版战斗任务优先级判定)
 	---------------------------------------------------------------------------
 	local c_bug_homeless = components.c_bug_homeless
 	if c_bug_homeless then
@@ -288,38 +280,23 @@ function package:init()
 			local owner, ed = comp.owner, comp.extra_data
 			if owner:FindComponent("c_bug_harvest") then owner:Destroy(false) return end
 
-			-- 【核心复刻】：战斗状态避让锁
-			-- 只有当单位处于非战斗状态（无目标、未工作、且已到达目标点）时才允许找家
+			-- 【核心复刻】：战斗任务优先。单位正在战斗或奔向前线时，归巢逻辑强制闭嘴。
 			local attack_comp = owner:FindComponent("c_turret", true)
 			if attack_comp and not owner.state_path_blocked then
 				local ent = attack_comp:GetRegisterEntity(1) or attack_comp:GetRegisterEntity(2)
 				local coord = attack_comp:GetRegisterCoord(1)
 				if attack_comp.is_working or ent or (coord and not owner:IsInRangeOf(coord, 5)) then
-					-- 正在执行任务中，归巢逻辑强制进入长休眠
 					return comp:SetStateSleep(300)
 				end
 			end
 
-			-- 目标重选
-			local currHome = owner:GetRegisterEntity(FRAMEREG_GOTO)
-			if currHome then
-				local has_slot = false
-				if currHome.exists and currHome.faction.id == "bugs" then
-					for _, v in ipairs(currHome.slots) do
-						if v.type == "bughole" and v.entity == nil then has_slot = true break end
-					end
-				end
-				if not has_slot then owner:SetRegister(FRAMEREG_GOTO, nil) currHome = nil end
-			end
-
-			-- 对接成功重置
 			if owner.is_docked then
 				ed.bad_homes, ed.penalty_level, ed.last_health = nil, nil, nil
 				Map.Defer(function() if comp.exists then comp:Destroy() end end)
 				return
 			end
 
-			-- 路径阻断记忆
+			-- 归巢黑名单
 			if owner.state_path_blocked then
 				local target_home = owner:GetRegisterEntity(FRAMEREG_GOTO)
 				if target_home and target_home.faction.id == "bugs" and owner:GetRangeTo(target_home) >= 5 then
@@ -331,7 +308,6 @@ function package:init()
 
 			if owner:GetRegisterEntity(FRAMEREG_GOTO) then return comp:SetStateSleep(30) end
 
-			-- 寻找空位
 			local newhome = Map.FindClosestEntity(owner, 15, function(e)
 				if (e.id == "f_bug_hive" or e.id == "f_bug_hive_large") then
 					if ed.bad_homes and ed.bad_homes[e.key] and ed.bad_homes[e.key] > Map.GetTick() then return false end
@@ -341,18 +317,17 @@ function package:init()
 
 			if newhome then owner:SetRegisterEntity(FRAMEREG_GOTO, newhome) return comp:SetStateSleep(20) end
 
-			-- 筑巢速率限制
+			-- 筑巢速率名额限制
 			local tick = Map.GetTick()
-			local bed = GetBugsFaction().extra_data
-			if bed.last_nest_tick_homeless == tick then
-				if (bed.nest_count_this_tick or 0) >= 2 then return comp:SetStateSleep(math.random(5, 10)) end
-				bed.nest_count_this_tick = bed.nest_count_this_tick + 1
+			local bugs_ed = GetBugsFaction().extra_data
+			if bugs_ed.last_nest_tick_homeless == tick then
+				if (bugs_ed.nest_count_this_tick or 0) >= 2 then return comp:SetStateSleep(math.random(5, 10)) end
+				bugs_ed.nest_count_this_tick = bugs_ed.nest_count_this_tick + 1
 			else
-				bed.last_nest_tick_homeless = tick
-				bed.nest_count_this_tick = 1
+				bugs_ed.last_nest_tick_homeless = tick
+				bugs_ed.nest_count_this_tick = 1
 			end
 
-			-- 真正的筑巢执行
 			if ed.extrawait then ed.extrawait = nil return comp:SetStateSleep(math.random(10, 40)) end
 			local foundlarge = Map.FindClosestEntity(owner, 8, function(e) return e.id == "f_bug_hive_large" end, FF_OWNFACTION)
 			Map.Defer(function()
@@ -380,6 +355,7 @@ function package:init()
 		if not home or not home.exists then Map.Defer(function() if owner.exists then owner:Destroy() end end) return comp:SetStateSleep(1) end
 		if target and not target.exists then data.state, data.target = "wander", nil return comp:SetStateSleep(1) end
 		if owner.is_moving then return comp:SetStateSleep(25) end
+
 		local state = data.state or "idle"
 		if state == "idle" then
 			target = Map.FindClosestEntity(owner, 8, function(e)
@@ -394,14 +370,13 @@ function package:init()
 		elseif state == "deploy" then
 			if not owner.state_path_blocked then if comp:RequestStateMove(target, 3) then return end end
 			data.target = nil
-			-- 同步原版密度
 			local hive_count = 0
 			Map.FindClosestEntity(owner, 20, function(e)
 				if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then hive_count = hive_count + 1 if hive_count >= 4 then return true end end
 			end, FF_OPERATING | FF_OWNFACTION)
 			if hive_count >= 4 then data.state = "wander" return comp:SetStateSleep(200) end
 
-			-- 【全局限速】：侦察虫筑巢接入全局 Nest CD
+			-- 侦察虫扩张受 save.last_nest_tick 全局战略锁控制
 			local save = Map.GetSave()
 			if (Map.GetTick() - (save.last_nest_tick or 0)) < 100 then data.state = "wander" return comp:SetStateSleep(100) end
 
@@ -429,7 +404,7 @@ function package:init()
 		end
 	end
 
-	-- Apply All Swarm Attack Hooks
+	-- Apply All Attack Hooks
 	local hooks = {
 		"c_trilobyte_attack", "c_trilobyte_attack_t2", "c_trilobyte_attack_t3",
 		"c_trilobyte_attack1", "c_trilobyte_attack2", "c_trilobyte_attack3", "c_trilobyte_attack4",
@@ -437,5 +412,5 @@ function package:init()
 	}
 	for _, n in ipairs(hooks) do if components[n] then components[n].on_update = BugAttackUpdate end end
 
-	print("[InsectLimit] v2.7.20 Aligned Final - Faithful Behavioral Logic Active.")
+	print("[InsectLimit] v2.7.21 Aligned - Dynamic Multi-Scaling Deployed.")
 end
