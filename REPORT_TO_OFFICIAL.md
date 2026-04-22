@@ -10,7 +10,7 @@
 *   **优化**：引入 250 格距离截断机制。若目标主基地超出范围，则自动切换至“就近打击”模式，攻击触发其活跃的周边目标。同时，确保侦察虫不受此限制，以维持正常的战略扩张。
 
 ### 2. 目标合法性筛选缺失导致性能崩溃 (Target Validity Issue)
-*   **诊断**：原版 AI 未对目标状态进行校验，常锁定“建筑蓝图”、“矿点”或“中立遗迹”作为主攻目标。由于这些实体无法被摧毁，导致大量单位在目标点堆积且不进入攻击循环，造成无意义的性能开销。
+*   **诊断**：原版 AI 未对目标状态进行校验，常锁定“建筑蓝图”作为主攻目标。由于这些实体无法被摧毁，导致大量单位在目标点堆积且不进入攻击循环，造成无意义的性能开销。
 *   **优化**：本模组引入了底层筛选，确保入侵目标必须是已部署且可被破坏的玩家实体。
 
 ### 3. 全局决策锁导致的反应滞后 (Global CD Bottleneck)
@@ -26,7 +26,7 @@
 *   **Optimization**: Implemented a 250-grid truncation. If the home base is out of range, units fallback to "Nearby Attack" mode against the triggering units. Scouts are excluded from this limit to preserve strategic expansion depth.
 
 ### 2. Lack of Target Validity Filtering
-*   **Diagnosis**: Vanilla AI often targets "Blueprints", "Explorables", or "Resources". Since these cannot be destroyed, units pile up indefinitely, crashing performance.
+*   **Diagnosis**: Vanilla AI often targets "Blueprints" as its main attack target. Since these cannot be destroyed, units pile up indefinitely, crashing performance.
 *   **Fix**: Introduced logic-level filtering to ensure swarms only target deployed and destructible entities.
 
 ### 3. Shared Global Cooldown Bottleneck
