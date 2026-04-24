@@ -2,9 +2,9 @@
 	"id": "InsectLimit",
 	"name": "虫群单位上限修改 (Insect Limit)",
 	"author": "镜影若滴",
-	"version_name": "2.7.26",
-	"version_code": 86,
-	"description": "v2.7.26 深度2逻辑对齐版。修正了统计口径：上限配额（绝对上限/削弱阈值/派遣阈值）严格按总玩家数（Total Players）扩展。引入频率保底公式（300 + 500/活跃玩家），防止多人环境下AI决策过快。集成 2.5.4 随机抽样算法优化 UPS。含完整 Assets 统计播报与战斗避让锁。全量双语注释。",
+	"version_name": "2.7.31",
+	"version_code": 90,
+	"description": "v2.7.31 调整统计初始化。上限配额（绝对上限/削弱阈值/派遣阈值）严格按总玩家数（Total Players）扩展。频率保底公式（300 + 500/活跃玩家），防止多人环境下AI决策过快。待随机抽样算法优化。含完整 Assets 统计播报与战斗避让锁。",
 	"packages": {
 		"InsectLimitAmin": {
 			"name": "InsectLimitAmin",

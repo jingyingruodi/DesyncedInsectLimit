@@ -1,5 +1,5 @@
 -- InsectLimit Mod - Performance & Intelligent Combat Fixes
--- Version: 2.7.26 (Log Alignment & Hard-Capped Throttling)
+-- Version: 2.7.31 (Legacy Save Auto-Merge & Pure Decoupling)
 -- Author: 镜影若滴
 
 local package = ...
@@ -44,7 +44,20 @@ end
 ---------------------------------------------------------------------------
 function Delay.DiagnosticHeartbeat(arg)
 	local bugs = GetBugsFaction()
-	if not bugs then return end
+	if not bugs then
+		-- 环境未就绪则延迟 10 tick 后重试
+		Map.Delay("DiagnosticHeartbeat", 10)
+		return
+	end
+
+	-- 【救档核心：唯一线程竞争自杀协议】
+	-- 如果当前 Tick 已经有统计完成了，说明当前运行的是旧存档残留的多余线程。
+	-- 立即终止本线程循环 (不执行 Map.Delay)，从而实现旧档多线程自动融合。
+	local tick = Map.GetTick()
+	local ed = bugs.extra_data
+	if ed.last_hb_run_tick == tick then return end
+	ed.last_hb_run_tick = tick
+
 	local ents = bugs.entities
 	local total_assets = #ents
 	local bot_count = 0
@@ -52,14 +65,12 @@ function Delay.DiagnosticHeartbeat(arg)
 		local e = ents[i]
 		if e and e.exists and e.has_movement and not e.is_construction then
 			bot_count = bot_count + 1
-				-- 自动清理低血量感染单位
+			-- 自动清理低血量感染单位
 			if e.state_custom_1 and e.max_health <= 80 then e:Destroy(false) end
 		end
 	end
 
-	local bugs_ed = bugs.extra_data
-	bugs_ed.unit_count = bot_count
-
+	ed.unit_count = bot_count
 	local active_pc, total_pc = GetPlayerStats()
 
 	-- 【逻辑稳固】：所有的容量上限 (Limit/Threshold) 均严格基于总玩家数 (total_pc)
@@ -68,7 +79,7 @@ function Delay.DiagnosticHeartbeat(arg)
 	local soft_limit = 4000 + (total_pc - 1) * 1500
 	local scout_limit = 6000 + (total_pc - 1) * 2000
 
-	-- 【对齐播报】：Players: 活跃/总数 | BOTS: 当前/上限 (Soft, Scout) | Assets: 总数
+	-- 播报完整格式
 	print(string.format("[InsectLimit] Heartbeat -> Players: %d/%d (Alive/Total) | BOTS: %d/%d (Soft: %d, Scout: %d) | Assets: %d",
 		active_pc, total_pc, bot_count, abs_limit, soft_limit, scout_limit, total_assets))
 
@@ -81,13 +92,32 @@ function Delay.BugForcePerish(arg)
 	if e and e.exists then if e.is_placed then e:PlayEffect("fx_digital") end e:Destroy(false) end
 end
 
+---------------------------------------------------------------------------
+-- 2. 系统注入启动器 (全面兼容旧版存档残留)
+---------------------------------------------------------------------------
+function MapMsg.OnTick()
+	-- 确保即使没有任何实体，模组逻辑也能自动拉起心跳
+	if _G.InsectLimitActive then return end
+	local bugs = GetBugsFaction()
+	if bugs then
+		_G.InsectLimitActive = true
+		local ed = bugs.extra_data
+		-- 兼容性检查：如果是新档或无残留旧档才拉起新的 Delay
+		if not ed.heartbeat_active and not ed.heartbeat_started then
+			ed.heartbeat_active = true
+			print("[InsectLimit] SYSTEM STARTUP -> Diagnostic Heartbeat bootstrapped via MapMsg.OnTick")
+			Map.Delay("DiagnosticHeartbeat", 5)
+		end
+	end
+end
+
 function package:init()
-	print("[InsectLimit] Initializing v2.7.26 - Logic Aligned & Throttling Optimized...")
+	print("[InsectLimit] Initializing v2.7.31 Final - Independent Simulation Startup Deployed...")
 
 	local components = data.components
 
 	---------------------------------------------------------------------------
-	-- 2. 进攻组件 Hook
+	-- 3. 进攻组件 Hook (精准战斗判定)
 	---------------------------------------------------------------------------
 	local function BugAttackUpdate(self, comp, cause)
 		if not comp.faction.is_player_controlled then
@@ -106,6 +136,7 @@ function package:init()
 				return true
 			end
 
+			-- 180s 容错卡死判定
 			local is_stuck = (cause & CC_FINISH_MOVE ~= 0 and owner.state_path_blocked) or owner.state_custom_1
 			if is_stuck then
 				if not ed.failed_move_ticks then ed.failed_move_ticks = Map.GetTick() + 900
@@ -130,13 +161,11 @@ function package:init()
 	end
 
 	---------------------------------------------------------------------------
-	-- 3. 大型蜂巢逻辑 (分布式随机采样 & 稳健频率公式)
+	-- 4. 大型蜂巢逻辑 (三路解耦 & 分布式采样)
 	---------------------------------------------------------------------------
 	components.c_bug_spawner_large.on_update = function(self, comp, cause)
 		if comp.faction.is_player_controlled then return comp:SetStateSleep(10000) end
 		local bugs_f = GetBugsFaction()
-		if not bugs_f.extra_data.heartbeat_started then bugs_f.extra_data.heartbeat_started = true Map.Delay("DiagnosticHeartbeat", 10) end
-
 		local active_pc, total_pc = GetPlayerStats()
 		-- 【频率保底公式】：300 + 500/玩家数。确保决策频率有下限，保护多人服务器。
 		local scaled_cd = 300 + math.floor(500 / active_pc)
@@ -153,7 +182,7 @@ function package:init()
 		if ed_hive.extra_spawned > 10 then
 			local tick, save, rnd = Map.GetTick(), Map.GetSave(), math.random()
 
-			-- 【性能护盾：随机抽样逻辑】
+			-- 分布式采样逻辑
 			local towards_any, towards_250, dist_250 = nil, nil, 9999999
 			local factions = Map.GetFactions()
 			for f_idx = 1, #factions do
@@ -175,7 +204,7 @@ function package:init()
 				end
 			end
 
-			-- --- 1：派遣侦察 ---
+			-- 通道 1：派遣侦察
 			if (tick - (save.last_scout_tick or 0)) > scaled_cd and unit_count < scout_limit then
 				if towards_any and comp.owner:GetRangeTo(towards_any) > 100 and rnd > 0.6 then
 					save.last_scout_tick = tick ed_hive.extra_spawned = 0
@@ -187,41 +216,30 @@ function package:init()
 					return comp:SetStateSleep(math.random(4000, 8000))
 				end
 			end
-
-			-- --- 2：发起进攻 (250格截断) ---
+			-- 通道 2：发起进攻 (250格智能截断)
 			if (tick - (save.last_attack_tick or 0)) > (scaled_cd * 0.8) and towards_250 then
 				local settings = Map.GetSettings()
 				if (settings.peaceful == 3 or dist_250 <= 60) then
 					if not IsBugActiveSeason() and rnd > 0.1 then return comp:SetStateSleep(math.random(2000, 4000)) end
 					save.last_attack_tick = tick ed_hive.extra_spawned = 0
-					Map.Defer(function() if comp.exists and towards_250.exists then
-						data.components.c_bug_spawn:on_trigger_action(comp, towards_250, true)
-					end end)
+					Map.Defer(function() if comp.exists and towards_250.exists then data.components.c_bug_spawn:on_trigger_action(comp, towards_250, true) end end)
 					return comp:SetStateSleep(math.random(2000, 4000))
 				end
 			end
-
-			-- --- 3：自然扩张 ---
+			-- 通道 3：随机自然扩张
 			if (tick - (save.last_nest_tick or 0)) > (scaled_cd * 1.5) and rnd < 0.2 then
 				local found = Map.FindClosestEntity(comp.owner, 10, function(e) return (e.id == "f_bug_hive" or e.id == "f_bug_hive_large") end, FF_OPERATING|FF_OWNFACTION)
-				if not found then
-					save.last_nest_tick = tick ed_hive.extra_spawned = 0
-					Map.Defer(function() if comp.exists then Map.CreateEntity(bugs_f, "f_bug_hive"):Place(comp.owner.location) end end)
-					return comp:SetStateSleep(math.random(1000, 2000))
-				end
+				if not found then save.last_nest_tick = tick ed_hive.extra_spawned = 0 Map.Defer(function() if comp.exists then Map.CreateEntity(bugs_f, "f_bug_hive"):Place(comp.owner.location) end end) return comp:SetStateSleep(math.random(1000, 2000)) end
 			end
 		end
 		return comp:SetStateSleep(math.random(300, 600))
 	end
 
-	---------------------------------------------------------------------------
-	-- 4. 归巢与筑巢 (15格避让优化)
-	---------------------------------------------------------------------------
+	-- 归巢逻辑 (原版避让机制)
 	if components.c_bug_homeless then
 		components.c_bug_homeless.on_update = function(self, comp, cause)
 			local owner, ed = comp.owner, comp.extra_data
 			if owner:FindComponent("c_bug_harvest") then owner:Destroy(false) return end
-
 			local attack_comp = owner:FindComponent("c_turret", true)
 			if attack_comp and not owner.state_path_blocked then
 				local ent = attack_comp:GetRegisterEntity(1) or attack_comp:GetRegisterEntity(2)
@@ -229,6 +247,7 @@ function package:init()
 				if attack_comp.is_working or ent or (coord and owner:GetRangeTo(coord) > 5) then return comp:SetStateSleep(300) end
 			end
 
+			-- 极速验位逻辑：解决“盯着满巢发呆”
 			local currHome = owner:GetRegisterEntity(FRAMEREG_GOTO)
 			if currHome then
 				local has_slot = false
@@ -237,33 +256,25 @@ function package:init()
 				end
 				if not has_slot then owner:SetRegister(FRAMEREG_GOTO, nil) currHome = nil end
 			end
-
-			if owner.is_docked then
-				ed.last_health = nil
-				Map.Defer(function() if comp.exists then comp:Destroy() end end) return
-			end
-
+			if owner.is_docked then ed.last_health = nil Map.Defer(function() if comp.exists then comp:Destroy() end end) return end
 			if owner.state_path_blocked then
 				local th = owner:GetRegisterEntity(FRAMEREG_GOTO)
 				if th and th.faction.id == "bugs" and owner:GetRangeTo(th) >= 5 then owner:SetRegister(FRAMEREG_GOTO, nil) end
 			end
-
 			if owner:GetRegisterEntity(FRAMEREG_GOTO) then return comp:SetStateSleep(30) end
-
 			local nh = Map.FindClosestEntity(owner, 15, function(e)
-				if e.id == "f_bug_hive" or e.id == "f_bug_hive_large" then
+				if (e.id == "f_bug_hive" or e.id == "f_bug_hive_large") then
 					for _, v in ipairs(e.slots) do if v.type == "bughole" and v.entity == nil then return true end end
 				end
 			end, FF_OPERATING | FF_OWNFACTION)
-
 			if nh then owner:SetRegisterEntity(FRAMEREG_GOTO, nh) return comp:SetStateSleep(10) end
 
+			-- 筑巢并发限流
 			local bugs_ed = GetBugsFaction().extra_data
 			if bugs_ed.last_nest_tick_homeless == Map.GetTick() then
 				if (bugs_ed.nest_count_this_tick or 0) >= 5 then return comp:SetStateSleep(5) end
 				bugs_ed.nest_count_this_tick = bugs_ed.nest_count_this_tick + 1
 			else bugs_ed.last_nest_tick_homeless = Map.GetTick() bugs_ed.nest_count_this_tick = 1 end
-
 			if ed.extrawait then ed.extrawait = nil return comp:SetStateSleep(math.random(10, 40)) end
 			Map.Defer(function() if comp.exists then
 				local neigh = Map.GetEntitiesInRange(owner, 4, FF_OPERATING|FF_OWNFACTION)
@@ -274,9 +285,7 @@ function package:init()
 		end
 	end
 
-	---------------------------------------------------------------------------
-	-- 5. 侦察 AI (同步全局限速锁)
-	---------------------------------------------------------------------------
+	-- 侦察虫 AI
 	components.c_bug_harvest.on_update = function(self, comp, cause)
 		local owner, data = comp.owner, comp.extra_data
 		local target, home = data.target, data.home
@@ -322,8 +331,7 @@ function package:init()
 		end
 	end
 
+	-- Apply Hooks
 	local hooks = {"c_trilobyte_attack", "c_trilobyte_attack_t2", "c_trilobyte_attack_t3", "c_trilobyte_attack1", "c_trilobyte_attack2", "c_trilobyte_attack3", "c_trilobyte_attack4", "c_wasp_attack1", "c_tripodonte1", "c_tetrapuss_attack1", "c_larva_attack1", "c_larva_attack2"}
 	for _, n in ipairs(hooks) do if components[n] then components[n].on_update = BugAttackUpdate end end
-
-	print("[InsectLimit] v2.7.26: Balanced Dual-Scaling & Stochastic Logic Finalized.")
 end
