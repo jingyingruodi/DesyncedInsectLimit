@@ -1,5 +1,5 @@
 -- InsectLimit Mod - Performance & Intelligent Combat Fixes
--- Version: 2.7.32 (Persistent Logic Alignment & Pressure Balancing)
+-- Version: 2.7.35 (Safety Reinforced & Expansion Fix)
 -- Author: 镜影若滴
 
 local package = ...
@@ -8,7 +8,7 @@ local package = ...
 -- 0. 文件级辅助函数 (File-Level Helpers)
 ---------------------------------------------------------------------------
 
--- 检查当前季节是否允许虫群活跃 (遵循原版平衡)
+-- 检查当前季节是否允许虫群活跃
 local function IsBugActiveSeason()
 	return math.abs(Map.GetYearSeason() - 0.5) < 0.25
 end
@@ -63,7 +63,6 @@ function Delay.DiagnosticHeartbeat(arg)
 		local e = ents[i]
 		if e and e.exists and e.has_movement and not e.is_construction then
 			bot_count = bot_count + 1
-				-- 自动清理低血量感染单位
 			if e.state_custom_1 and e.max_health <= 80 then e:Destroy(false) end
 		end
 	end
@@ -72,9 +71,15 @@ function Delay.DiagnosticHeartbeat(arg)
 	local active_pc, total_pc = GetPlayerStats()
 
 	-- 【逻辑对齐】：上限配额严格基于总人数 (total_pc)，频率缩放基于活跃人数 (active_pc)。
+	-- abs_limit是绝对单位上限，soft_limit是削弱闸值(指超过这个值开始削减波次强度减少单位数量)，scout_limit是派遣侦察虫筑巢行动活跃的上限。scaled_cd指全局CD(tick)。
 	local abs_limit = 12000 + (total_pc - 1) * 3000
 	local soft_limit = 4000 + (total_pc - 1) * 1500
 	local scout_limit = 6000 + (total_pc - 1) * 2000
+
+	-- 同步动态上限至 extra_data
+	bugs_ed.abs_limit = abs_limit
+	bugs_ed.soft_limit = soft_limit
+	bugs_ed.scout_limit = scout_limit
 
 	local scaled_cd = 200 + math.floor(500 / active_pc)
 
@@ -91,7 +96,7 @@ function Delay.BugForcePerish(arg)
 end
 
 ---------------------------------------------------------------------------
--- 2. 系统注入启动器 (全面兼容旧版存档残留)
+-- 2. 系统注入启动器
 ---------------------------------------------------------------------------
 function MapMsg.OnTick()
 	if _G.InsectLimitActive then return end
@@ -108,11 +113,11 @@ function MapMsg.OnTick()
 end
 
 function package:init()
-	print("[InsectLimit] Initializing v2.7.32 Final - Surgical Consolidation Deployed...")
+	print("[InsectLimit] Initializing v2.7.35 - Safety Gatecheck & Expansion Fix Deployed...")
 
 	local components = data.components
 
-	-- 进攻组件 Hook (精准战斗判定)
+	-- 进攻组件 Hook
 	local function BugAttackUpdate(self, comp, cause)
 		if not comp.faction.is_player_controlled then
 			local owner, ed = comp.owner, comp.extra_data
@@ -154,92 +159,212 @@ function package:init()
 		return data.components.c_turret.on_update(self, comp, cause)
 	end
 
-	-- 大型蜂巢行为 (三路解耦 & 压力均衡采样)
+	-- 【波次产生器】：完全克隆并修复原版逻辑中的削弱不匹配问题
+	components.c_bug_spawn.on_trigger_action = function (self, comp, other_entity, force)
+		local bugs_f = comp.faction
+		if bugs_f.is_player_controlled then Map.Defer(function() if comp.exists then comp:Destroy() end end) return end
+
+		-- 激活周围巢穴
+		if comp.id == "c_bug_spawner_large" then
+			Map.FindClosestEntity(comp.owner, 10, function(e)
+				if e.id ~= "f_bug_hive" then return end
+				local c = e:FindComponent("c_bug_spawn")
+				if c then self:on_trigger_action(c, other_entity, force) end
+			end, FF_OPERATING)
+		end
+
+		if not other_entity.faction.is_player_controlled or bugs_f:GetTrust(other_entity) ~= "ENEMY" or other_entity.stealth then return end
+
+		local ed = comp.extra_data
+		if not ed.bugs then ed.bugs, ed.spawned, ed.lvl, ed.extra_spawned = {}, Map.GetTick() - 901, 0, 0 end
+		for i=#ed.bugs,1,-1 do if not ed.bugs[i].exists then table.remove(ed.bugs, i) end end
+
+		if #ed.bugs > 0 then
+			for _,bug in ipairs(ed.bugs) do
+				bug:FindComponent("c_turret", true):SetRegisterCoord(1, other_entity.location)
+				if force and not bug:FindComponent("c_bug_homeless") then bug:SetRegisterEntity(FRAMEREG_GOTO, nil) bug:AddComponent("c_bug_homeless", "hidden") end
+			end
+			return
+		end
+
+		local map_tick = Map.GetTick()
+		if map_tick - ed.spawned < 900 and not force then return end
+
+		-- 1. 计算基础数量 (补全 Stability 系统加成)
+		local early_easy = 2 + math.min(Map.GetTotalDays() // 2, 6)
+		local max_num = (comp.owner.id == "f_bug_hole" and 1 or early_easy) + ed.extra_spawned
+		if StabilityGet then
+			local stability = -StabilityGet()
+			max_num = max_num + math.max(0, stability // 500)
+		end
+		max_num = math.min(max_num, comp.owner.def.slots and comp.owner.def.slots.bughole or 1)
+		local num = math.random(math.ceil(max_num / 3), max_num)
+
+		-- 2. 玩家等级与距离判定 (补全 Plateau 地形判定)
+		local other_faction = other_entity.faction
+		local player_level = GetPlayerFactionLevel(other_faction)
+		local loc = comp.owner.location
+		local dist = 0
+		if other_faction.home_location then
+			local dx, dy = loc.x - other_faction.home_location.x, loc.y - other_faction.home_location.y
+			dist = dx*dx + dy*dy
+		end
+		local settings = Map.GetSettings()
+		local tile_h = Map.GetElevation(loc.x, loc.y)
+		if tile_h < settings.plateau_level then dist = 0 end
+
+		if dist > 30000 then player_level = player_level + 5
+		elseif dist > 90000 then player_level = player_level + 10
+		elseif dist > 122500 then player_level = player_level + 20 end
+
+		-- 3. 强度恢复核心逻辑
+		if force and settings.peaceful == 3 then
+			local ramp = 0.4
+			local level = math.ceil(player_level * ramp)
+			num = math.max(level + 1, num) -- 强度泵
+
+			-- 动态削弱：对齐模组上限，引入 0.33 保底强度
+			local unit_count = bugs_f.extra_data.unit_count or 0
+			local soft = bugs_f.extra_data.soft_limit or 4000
+			local abs = bugs_f.extra_data.abs_limit or 12000
+			if unit_count > soft then
+				local intensity = math.max(0.33, 1.0 - (unit_count - soft) / (abs - soft))
+				num = math.max(1, math.floor(num * intensity)) -- 强度修正
+			end
+		else
+			num = math.min((player_level // 3) + 1, num)
+		end
+
+		local bug_levels = GetBugCountsForLevel(player_level, num, force)
+		local spawn_delay = 1
+		local all_bugs_count = 0
+		for i=1,#bug_levels do all_bugs_count = all_bugs_count + bug_levels[i] end
+		local num_waves = (all_bugs_count // 30) + 1
+		local target_loc = Tool.Copy(other_entity.location)
+
+		for i=#bug_levels,1,-1 do
+			if bug_levels[i] > 0 then
+				for j=1,bug_levels[i] do
+					local bug_delay = (((spawn_delay % 15) + ((math.random(1, num_waves)-1)*30))*3)+1
+					Map.Delay("SpawnFromHive", math.max(1, bug_delay), {
+						level = i, force = force, owner = comp.owner, loc = Tool.Copy(loc), target = target_loc, comp = comp, faction = bugs_f
+					})
+					spawn_delay = spawn_delay + 1
+				end
+			end
+		end
+		ed.spawned, ed.lvl = map_tick, ed.lvl + 1
+		if comp.owner.id == "f_bug_hive" and ed.extra_spawned < 8 and math.random() <= 0.05 then
+			local x, y = comp.owner.location.x, comp.owner.location.y
+			local nb = Map.CreateEntity(bugs_f, "f_bug_hole") nb:Place(math.random(x-4, x+4), math.random(y-4, y+4))
+			nb:PlayEffect("fx_digital_in") ed.extra_spawned = ed.extra_spawned + 1
+		end
+		if not ed.rewards then comp.owner:AddItem("bug_carapace", math.min(all_bugs_count, 20)) ed.rewards = all_bugs_count end
+	end
+
+	-- 大型蜂巢行为 (性能门禁前置与安全增强版寻敌)
 	components.c_bug_spawner_large.on_update = function(self, comp, cause)
 		if comp.faction.is_player_controlled then return comp:SetStateSleep(10000) end
+
 		local bugs_f = GetBugsFaction()
+		local bugs_ed = bugs_f.extra_data
+		local unit_count = bugs_ed.unit_count or 0
+
+		-- 【门禁 1】：绝对上限预检
+		if unit_count > (bugs_ed.abs_limit or 12000) then return comp:SetStateSleep(1000) end
+
+		local tick, save = Map.GetTick(), Map.GetSave()
 		local active_pc, total_pc = GetPlayerStats()
-		-- 【频率保底逻辑】：200 + 500/活跃玩家，确保多人决策稳定
 		local scaled_cd = 200 + math.floor(500 / active_pc)
 
-		local unit_count = bugs_f.extra_data.unit_count or 0
-		if unit_count > (12000 + (total_pc - 1) * 3000) then return comp:SetStateSleep(5000) end
+		-- 【门禁 2】：冷却状态预检 (包含扩张 nest_ready)
+		local scout_ready = (tick - (save.last_scout_tick or 0)) > scaled_cd and unit_count < (bugs_ed.scout_limit or 6000)
+		local attack_ready = (tick - (save.last_attack_tick or 0)) > (scaled_cd * 0.8)
+		local nest_ready = (tick - (save.last_nest_tick or 0)) > (scaled_cd * 1.5)
+
+		if not (scout_ready or attack_ready or nest_ready) then
+			return comp:SetStateSleep(math.random(100, 200))
+		end
 
 		local ed_hive = comp.extra_data
 		ed_hive.extra_spawned = (ed_hive.extra_spawned or 0) + 1
 
+		-- 【门禁 3】：决策窗口
 		if ed_hive.extra_spawned > 10 then
-			local tick, save, rnd = Map.GetTick(), Map.GetSave(), math.random()
-
-			-- 【核心优化：分布式压力均衡寻敌】
-			-- 随机化势利列表起始索引，防止全图蜂巢死盯着玩家 1 打。集成 2.5.4 随机采样。
+			local rnd = math.random()
 			local towards_any, towards_250, dist_250 = nil, nil, 9999999
             local factions = Map.GetFactions()
             local f_count = #factions
 
-            local tick = Map.GetTick()
-            local hive_key = comp.owner.key or 0
+            -- 【安全加固】：防护 modulo 0 导致的脚本中断 (极端图)
+            if f_count > 0 then
+                local hive_key = comp.owner.key or 0
+                local f_start = ((hive_key + tick) % f_count) + 1
+                local forward = (tick % 2 == 0)
 
-            -- 起点扰动
-            local f_start = ((hive_key + tick) % f_count) + 1
+                for i = 1, f_count do
+                    local f_idx = forward and ((f_start + i - 2) % f_count + 1) or ((f_start - i + f_count) % f_count + 1)
+                    local faction = factions[f_idx]
 
-            -- 方向扰动
-            local forward = (tick % 2 == 0)
+                    if faction.is_player_controlled and faction.num_entities > 0 and bugs_f:GetTrust(faction) == "ENEMY" then
+						local home = faction.home_entity
+						local dice = (math.random() > 0.5)
 
-            for i = 1, f_count do
-                local f_idx
-                if forward then
-                    f_idx = (f_start + i - 2) % f_count + 1
-                else
-                    f_idx = (f_start - i + f_count) % f_count + 1
-                end
+						-- 1. 几率斩首
+						if dice and home and home.exists and IsAttackable(home) then
+							local d = comp.owner:GetRangeTo(home)
+							towards_any = home
+							if d < 250 then towards_250, dist_250 = home, d end
+						end
 
-                local faction = factions[f_idx]
+						-- 2. 常规采样
+						if not towards_250 then
+							local entities = faction.entities
+							local e_count = #entities
+							if e_count > 0 then
+								for try = 1, 15 do
+									local ent = entities[math.random(1, e_count)]
+									if ent and ent.exists and IsAttackable(ent) then
+										local d = comp.owner:GetRangeTo(ent)
+										towards_any = ent
+										if d < 250 and d < dist_250 then towards_250, dist_250 = ent, d end
+										if d < 250 then break end
+									end
+								end
+							end
+						end
 
-                if faction.is_player_controlled and faction.num_entities > 0 and bugs_f:GetTrust(faction) == "ENEMY" then
-                    local entities = faction.entities
-                    local e_count = #entities
+						-- 3. 后置兜底
+						if not towards_250 and not dice and home and home.exists and IsAttackable(home) then
+							local d = comp.owner:GetRangeTo(home)
+							towards_any = home
+							if d < 250 then towards_250, dist_250 = home, d end
+						end
 
-                    if e_count > 0 then
-                        for try = 1, 15 do
-                            local ent = entities[math.random(1, e_count)]
-                            if ent and ent.exists and IsAttackable(ent) then
-                                local d = comp.owner:GetRangeTo(ent)
-                                towards_any = ent
-                                if d < 250 and d < dist_250 then
-                                    towards_250, dist_250 = ent, d
-                                end
-                                break
-                            end
-                        end
+                        if towards_any then break end
                     end
-
-                    if towards_any then break end
                 end
             end
 
-			-- 侦察
-			if (tick - (save.last_scout_tick or 0)) > scaled_cd and unit_count < (6000 + (total_pc-1)*2000) then
-				if towards_any and comp.owner:GetRangeTo(towards_any) > 100 and rnd > 0.6 then
-					save.last_scout_tick = tick ed_hive.extra_spawned = 0
-					local target_loc = Tool.Copy(towards_any.location)
-					Map.Defer(function() if comp.owner.exists and target_loc then
-						local s = Map.CreateEntity(bugs_f, "f_triloscout") s:Place(comp.owner)
-						local h = s:FindComponent("c_bug_harvest") if h then h.extra_data.home = comp.owner h.extra_data.towards = target_loc end
-					end end)
-					return comp:SetStateSleep(math.random(4000, 8000))
-				end
+			-- --- 执行层 ---
+			if scout_ready and towards_any and comp.owner:GetRangeTo(towards_any) > 100 and rnd > 0.6 then
+				save.last_scout_tick = tick ed_hive.extra_spawned = 0
+				local target_loc = Tool.Copy(towards_any.location)
+				Map.Defer(function() if comp.owner.exists and target_loc then
+					local s = Map.CreateEntity(bugs_f, "f_triloscout") s:Place(comp.owner)
+					local h = s:FindComponent("c_bug_harvest") if h then h.extra_data.home = comp.owner h.extra_data.towards = target_loc end
+				end end)
+				return comp:SetStateSleep(math.random(4000, 8000))
 			end
 
-			-- --- 发起进攻 (250格截断) ---
-			if (tick - (save.last_attack_tick or 0)) > (scaled_cd * 0.8) and towards_250 then
+			if attack_ready and towards_250 then
 				if not IsBugActiveSeason() and rnd > 0.1 then return comp:SetStateSleep(math.random(2000, 4000)) end
 				save.last_attack_tick = tick ed_hive.extra_spawned = 0
 				Map.Defer(function() if comp.exists and towards_250.exists then data.components.c_bug_spawn:on_trigger_action(comp, towards_250, true) end end)
 				return comp:SetStateSleep(math.random(2000, 4000))
 			end
 			-- 自然扩张
-			if (tick - (save.last_nest_tick or 0)) > (scaled_cd * 1.5) and rnd < 0.2 then
+			if nest_ready and rnd < 0.2 then
 				local found = Map.FindClosestEntity(comp.owner, 10, function(e) return (e.id == "f_bug_hive" or e.id == "f_bug_hive_large") end, FF_OPERATING|FF_OWNFACTION)
 				if not found then save.last_nest_tick = tick ed_hive.extra_spawned = 0 Map.Defer(function() if comp.exists then Map.CreateEntity(bugs_f, "f_bug_hive"):Place(comp.owner.location) end end) return comp:SetStateSleep(math.random(1000, 2000)) end
 			end
@@ -247,7 +372,7 @@ function package:init()
 		return comp:SetStateSleep(math.random(300, 600))
 	end
 
-	-- 归巢判定 (复刻原版避让锁)
+	-- 其余逻辑维持 v2.7.32 稳定版
 	if components.c_bug_homeless then
 		components.c_bug_homeless.on_update = function(self, comp, cause)
 			local owner, ed = comp.owner, comp.extra_data
