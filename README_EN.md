@@ -7,7 +7,7 @@ This mod enhances the swarm AI by fixing core logic defects, decoupling global d
 ### 1. Incursion Distance Truncation & Pathing Optimization
 - **Eliminated "Long-Distance Marching"**: Fixed a vanilla defect where swarms would hard-lock onto the player's home base regardless of distance. In vanilla, if a unit enters a hive's range, the entire swarm might attempt to pathfind across thousands of grids, causing massive CPU overhead.
 - **250-Grid Smart Truncation**: Implements a 250-grid limit for combat incursions. If the target home base is beyond this range, the swarm automatically re-targets the **nearest visible player unit** that triggered the aggression.
-- **Strategic Scout Freedom**: While combat ranges are restricted, scouts retain unlocked pathfinding limits (700+ grids) to ensure natural expansion and strategic depth are maintained.
+- **Strategic Scout Freedom**: While combat ranges are restricted, scouts retain unlocked pathfinding limits (250+ grids) to ensure natural expansion and strategic depth are maintained.
 
 ### 2. Target Validity Filtering (Anti-Piling Core)
 - **Blocked Invalid Targets**: Prevents vanilla AI from targeting "Blueprints" or other indestructible objects. This eliminates the "unit piling" bug where swarms would cluster around invalid targets indefinitely, crushing server performance.
