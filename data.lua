@@ -67,9 +67,9 @@ function Delay.DiagnosticHeartbeat(arg)
 	bugs_ed.unit_count = bot_count
 	local active_pc, total_pc = GetPlayerStats()
 
-	local abs_limit = 12000 + (total_pc - 1) * 2000
-	local soft_limit = 3000 + (total_pc - 1) * 500
-	local scout_limit = 6000 + (total_pc - 1) * 1000
+	local abs_limit = 12000 + (total_pc - 1) * 1500 + (active_pc - 1) * 500
+	local soft_limit = 3000 + (total_pc - 1) * 500 + (active_pc - 1) * 250
+	local scout_limit = 6000 + (total_pc - 1) * 750 + (active_pc - 1) * 250
 
 	bugs_ed.abs_limit = abs_limit
 	bugs_ed.soft_limit = soft_limit
