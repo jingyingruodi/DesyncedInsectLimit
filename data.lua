@@ -83,7 +83,7 @@ function Delay.DiagnosticHeartbeat(arg)
 
 	-- 【对齐播报】：Players: 活跃/总数 (Alive/Total) | BOTS: 当前/上限 (Soft, Scout) | Assets: 总资产
 	print(string.format("[InsectLimit] Heartbeat -> Players: %d/%d (Alive/Total) | BOTS: %d/%d (Soft: %d, Scout: %d) | Assets: %d",
-		active_pc, total_pc, bot_count, abs_limit, soft_limit, scout_limit, total_assets, ))
+		active_pc, total_pc, bot_count, abs_limit, soft_limit, scout_limit, total_assets))
 	Map.Delay("DiagnosticHeartbeat", 150 + math.random(-10, 10))
 end
 
