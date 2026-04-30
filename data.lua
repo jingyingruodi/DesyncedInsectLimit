@@ -1,5 +1,5 @@
 -- InsectLimit Mod - Performance & Intelligent Combat Fixes
--- Version: 2.8.7 (Logic Decoupling & Double-Track CD Fix)
+-- Version: 2.8.8 (Logic Decoupling & Double-Track CD Fix)
 -- Author: 镜影若滴
 
 local package = ...
@@ -97,14 +97,14 @@ function MapMsg.OnTick()
 		local ed = bugs.extra_data
 		if not ed.heartbeat_active and not ed.heartbeat_started then
 			ed.heartbeat_active = true
-			print("[InsectLimit] SYSTEM STARTUP -> v2.8.7 Logic Decoupling Deployed")
+			print("[InsectLimit] SYSTEM STARTUP -> v2.8.8 Logic Decoupling Deployed")
 			Map.Delay("DiagnosticHeartbeat", 5)
 		end
 	end
 end
 
 function package:init()
-	print("[InsectLimit] Initializing v2.8.7 - Fixing Decoupling & Index Bug...")
+	print("[InsectLimit] Initializing v2.8.8 - Fixing Decoupling & Index Bug...")
 
 	local components = data.components
 
@@ -167,16 +167,34 @@ function package:init()
 		if not ed.bugs then ed.bugs, ed.spawned, ed.lvl, ed.extra_spawned = {}, Map.GetTick() - 901, 0, 0 end
 		for i=#ed.bugs,1,-1 do if not ed.bugs[i].exists then table.remove(ed.bugs, i) end end
 
-		if #ed.bugs > 0 then
-			for _,bug in ipairs(ed.bugs) do
-				bug:FindComponent("c_turret", true):SetRegisterCoord(1, other_entity.location)
-				if force and not bug:FindComponent("c_bug_homeless") then bug:SetRegisterEntity(FRAMEREG_GOTO, nil) bug:AddComponent("c_bug_homeless", "hidden") end
-			end
-			return
-		end
+		for i=#ed.bugs,1,-1 do
+            if not ed.bugs[i].exists then table.remove(ed.bugs, i) end
+        end
+
+        -------------------------------------------------
+        -- 第一优先级：已有驻军立即反击
+        -------------------------------------------------
+        if #ed.bugs > 0 then
+            for _,bug in ipairs(ed.bugs) do
+                if bug.exists then
+                    local atk = bug:FindComponent("c_turret", true)
+                    if atk then
+                        atk:SetRegisterCoord(1, other_entity.location)
+                    end
+
+                    if force and not bug:FindComponent("c_bug_homeless") then
+                        bug:SetRegisterEntity(FRAMEREG_GOTO, nil)
+                        bug:AddComponent("c_bug_homeless", "hidden")
+                    end
+                end
+            end
+            return
+        end
 
 		local tick = Map.GetTick()
-		if tick - ed.spawned < 900 and not (force or retaliate) then return end
+        if tick - ed.spawned < 900 then
+            return
+        end
 
 		local early_easy = 2 + math.min(Map.GetTotalDays() // 2, 6)
 		local max_num = (comp.owner.id == "f_bug_hole" and 1 or early_easy) + ed.extra_spawned
