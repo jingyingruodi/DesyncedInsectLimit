@@ -426,8 +426,8 @@ print("[InsectLimit] Initializing v2.9.1 - CD-Gated + Dist-Decay + DynSuppress..
 				sct_suppress_tick[atk_f_id] = tick
 				save.f_sct_suppress_val = sct_suppress_val
 				save.f_sct_suppress_tick = sct_suppress_tick
-				-- print(string.format("[InsectLimit] ATK→SUPPRESS | faction=%s | +750 | %d→%d | scoutCD=%.0ft",
-					tostring(atk_f_id), cur_suppress, new_suppress, 700.0 + new_suppress))
+				--print(string.format("[InsectLimit] ATK→SUPPRESS | faction=%s | +750 | %d→%d | scoutCD=%.0ft",
+				--	tostring(atk_f_id), cur_suppress, new_suppress, 700.0 + new_suppress))
 				local f_atk_ticks = save.f_attack_ticks or {}
 				f_atk_ticks[atk_f_id] = tick -- 精准上 CD
 				save.f_attack_ticks = f_atk_ticks
