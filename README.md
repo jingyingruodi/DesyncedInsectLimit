@@ -31,6 +31,16 @@
 ### 4. 多人环境动态适配
 - **虫群行动CD重构**：将虫巢进攻与侦察的全局CD替换为对**每个玩家势力单独一个全局CD**。同时也避免多人环境下部分玩家长期不会被虫群袭击或者被过于频繁的被袭击的问题。
 - **虫群单位上限动态缩放**：单位上限配额按**总玩家数**扩展以维持世界强度。
+
+### 5. 距离衰减进攻成功率 (v2.9 新增)
+- **进攻概率随距离线性衰减**：50格内发起进攻**100%成功**；250格处仅剩**5%成功率**。失败不消耗全局CD，虫巢进入下一蓄能周期。
+- **效果**：稀疏分布的远距离虫巢进攻频率自然降低，密集近身蜂巢压迫感不变——使虫群行为节奏更贴合原版体验。
+
+### 6. 侦察扩张动态抑制 (v2.9 新增)
+- **自调节负反馈机制**：每次进攻成功后，该玩家势力侦察CD获得 **+800 tick 抑制值**（上限1400），随时间以 **1/tick 速率自然衰减**。
+- **进攻越频繁 → 侦察扩张越消极**：能有效改善一边对玩家疯狂猛攻一边疯狂扩张的情况，优化玩家体验。
+- **不会瘫痪**：侦察基础CD 700t，最大CD 2100t（约7分钟），即使饱和进攻下侦察依然周期性发生。
+- **多人完全独立**：每个玩家势力各自维护独立的抑制值，互不干扰。
 - 
 ## ⚙ 默认动态上限（单人）
 
@@ -86,6 +96,18 @@ It resolves issues such as ultra long-distance cross-map pathfinding, mindless t
 
 - **Swarm action cooldown rework**: Replaces the global cooldown for hive attacks and scouting with **an independent global cooldown for each player faction**. This also prevents situations in multiplayer where some players are not attacked for long periods, or are attacked too frequently.
 - **Dynamic swarm unit cap scaling**: Unit cap quotas expand based on the **total number of players** to maintain world pressure.
+
+### 5. Distance-Based Attack Success Rate (v2.9 New)
+
+- **Attack probability decays linearly with distance**: Within 50 tiles → **100% success**; at 250 tiles → only **5% success**. Failed attempts do not consume the global cooldown; the hive returns to its charge cycle.
+- **Effect**: Sparse distant hives attack less frequently, while dense nearby hives retain full pressure — bringing swarm pacing closer to vanilla.
+
+### 6. Dynamic Scout Expansion Suppression (v2.9 New)
+
+- **Self-regulating negative feedback**: Each successful attack adds **+800 ticks of suppression** (cap 1400) to that faction's scout cooldown, which naturally decays at **1/tick**.
+- **More attacks → slower expansion**: Effectively curbs the scenario where swarms simultaneously relentlessly assault a player while aggressively expanding, improving the overall player experience.
+- **Never paralyzed**: Scout base CD is 700t, maximum 2100t (~7 min). Even under saturation attacks, scouting still occurs periodically.
+- **Fully independent per player**: Each player faction maintains its own suppression value with zero cross-interference.
 
 ## ⚙ Default Dynamic Caps (Single Player)
 
