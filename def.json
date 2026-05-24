@@ -2,9 +2,9 @@
 	"id": "InsectLimit",
 	"name": "虫群单位上限修改 (Insect Limit)",
 	"author": "镜影若滴",
-	"version_name": "2.8.8",
-	"version_code": 97,
-	"description": "v2.8.8。上限配额（绝对上限/削弱阈值/派遣阈值）严格按总玩家数（Total Players）扩展。对每个玩家单独算全局CD，休眠时长与CD随机浮动。含完整 Assets 统计播报与战斗避让锁。",
+	"version_name": "2.9",
+	"version_code": 100,
+	"description": "v2.9新增CD门控预扫描；距离衰减成功率(100格→100%,250格→30%)；侦察抑制值(进攻频繁→侦察消极，自动负反馈调节)。并回合多人优化，任然每玩家独立全局CD。",
 	"packages": {
 		"InsectLimitAmin": {
 			"name": "InsectLimitAmin",

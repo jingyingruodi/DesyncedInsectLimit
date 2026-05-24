@@ -1,5 +1,5 @@
 -- InsectLimit Mod - Performance & Intelligent Combat Fixes
--- Version: 2.8.8 (Logic Decoupling & Double-Track CD Fix)
+-- Version: 2.9 (CD-Gated Cadence + Distance-Decay + Dynamic Scout Suppress)
 -- Author: 镜影若滴
 
 local package = ...
@@ -97,14 +97,14 @@ function MapMsg.OnTick()
 		local ed = bugs.extra_data
 		if not ed.heartbeat_active and not ed.heartbeat_started then
 			ed.heartbeat_active = true
-			print("[InsectLimit] SYSTEM STARTUP -> v2.8.8 Logic Decoupling Deployed")
+			print("[InsectLimit] SYSTEM STARTUP -> v2.9 DynSuppress Deployed")
 			Map.Delay("DiagnosticHeartbeat", 5)
 		end
 	end
 end
 
 function package:init()
-	print("[InsectLimit] Initializing v2.8.8 - Fixing Decoupling & Index Bug...")
+print("[InsectLimit] Initializing v2.9 - CD-Gated + Dist-Decay + DynSuppress...")
 
 	local components = data.components
 
@@ -271,6 +271,8 @@ function package:init()
 	end
 
 	-- 大型蜂巢行为 (深度逻辑解耦：完全分离进攻与侦察的目标、ID与账本)
+	-- v2.9: CD门控预扫描——仿原版机制，CD期间不推进extra_spawned计数器
+	-- 原版全局CD未到时extra_spawned不递增；本模组改为按玩家势力独立判定
 	components.c_bug_spawner_large.on_update = function(self, comp, cause)
 		if comp.faction.is_player_controlled then return comp:SetStateSleep(10000 + math.random(-10, 10)) end
 
@@ -281,6 +283,45 @@ function package:init()
 
 		local tick, save = Map.GetTick(), Map.GetSave()
 		local nest_ready = (tick - (save.last_nest_tick or 0)) > (1000 + math.random(-10, 10))
+
+		-- 【CD门控预扫描】：若所有玩家势力均在CD中且无扩张需求，
+		-- 则仿原版行为不递增extra_spawned，休眠至最近CD到期
+		-- 侦察CD = 700 + 侦察抑制值（进攻越频繁抑制越高，随时间衰减）
+		local f_atk_ticks_pre = save.f_attack_ticks or {}
+		local f_sct_ticks_pre = save.f_scout_ticks or {}
+		-- 【侦察抑制值】：进攻成功+500，每tick衰减1，上限1400（侦察CD最大2100）
+		local sct_suppress_val = save.f_sct_suppress_val or {}
+		local sct_suppress_tick = save.f_sct_suppress_tick or {}
+		local function GetSctSuppress(f_id)
+			local elapsed = tick - (sct_suppress_tick[f_id] or tick)
+			return math.max(0, (sct_suppress_val[f_id] or 0) - elapsed)
+		end
+		local any_ready = nest_ready  -- 扩张需求可绕过CD门控
+		local min_cd_remain = 999999
+
+		if not any_ready then
+			local factions_pre = Map.GetFactions()
+			for _, faction in ipairs(factions_pre) do
+				if faction and faction.is_player_controlled and faction.num_entities > 0
+				   and bugs_f:GetTrust(faction) == "ENEMY" then
+					local f_id = faction.id
+					local atk_remain = 700 - (tick - (f_atk_ticks_pre[f_id] or 0))
+					local sct_suppress = GetSctSuppress(f_id)
+					local sct_remain = (700 + sct_suppress) - (tick - (f_sct_ticks_pre[f_id] or 0))
+					if atk_remain <= 0 or sct_remain <= 0 then
+						any_ready = true
+						break
+					end
+					if atk_remain < min_cd_remain then min_cd_remain = atk_remain end
+					if sct_remain < min_cd_remain then min_cd_remain = sct_remain end
+				end
+			end
+		end
+
+		if not any_ready then
+			-- 所有玩家势力CD均未到期：休眠至最近CD到期（仿原版time_between+1行为）
+			return comp:SetStateSleep(math.max(5, math.min(min_cd_remain + 1, 300) + math.random(-5, 5)))
+		end
 
 		local ed_hive = comp.extra_data
 		ed_hive.extra_spawned = (ed_hive.extra_spawned or 0) + 1
@@ -307,9 +348,11 @@ function package:init()
 
 					if faction and faction.is_player_controlled and faction.num_entities > 0 and bugs_f:GetTrust(faction) == "ENEMY" then
 						local f_id = faction.id
-						-- 独立判定两个类型的 CD
+						-- 独立判定两个类型的 CD（侦察CD含动态抑制值）
 						local can_atk_f = (tick - (f_atk_ticks[f_id] or 0)) > (700 + math.random(-10, 10))
-						local can_sct_f = (tick - (f_sct_ticks[f_id] or 0)) > (700 + math.random(-10, 10)) and (unit_count < (bugs_ed.scout_limit or 6000))
+						local sct_suppress_ck = GetSctSuppress(f_id)
+						local can_sct_f = (tick - (f_sct_ticks[f_id] or 0)) > (700 + sct_suppress_ck + math.random(-10, 10)) and (unit_count < (bugs_ed.scout_limit or 6000))
+						-- DEBUG: print(string.format("[InsectLimit] CD-CHECK | f=%s | atk=%s sct=%s(supp=%d)", tostring(f_id), tostring(can_atk_f), tostring(can_sct_f), sct_suppress_ck))
 
 						if can_atk_f or can_sct_f then
 							any_action_possible = true
@@ -364,8 +407,27 @@ function package:init()
 			-- --- 执行决策（双轨完全隔离） ---
 			-- 1. 进攻执行 (仅使用 atk_f_id)
 			if atk_target and atk_f_id then
+				-- 【距离衰减成功率】：100格内必成功，250格仅30%，线性插值
+				-- 失败不消耗CD，重置计数器，进入下一周期
+				if atk_dist > 100 then
+					local atk_prob = 1.0 - (atk_dist - 100) * 0.7 / 150.0
+					if math.random() > atk_prob then
+						ed_hive.extra_spawned = 0
+						return comp:SetStateSleep(math.random(290, 310))
+					end
+				end
 				if not IsBugActiveSeason() and rnd > 0.1 then return comp:SetStateSleep(math.random(1990, 2010)) end
 				ed_hive.extra_spawned = 0
+				-- 【侦察抑制值更新】：进攻成功追加500抑制（上限1400），随时间自然衰减
+				-- 进攻越频繁→抑制越高→侦察扩张越消极，实现自调节负反馈
+				local cur_suppress = GetSctSuppress(atk_f_id)
+				local new_suppress = math.min(1400, cur_suppress + 500)
+				sct_suppress_val[atk_f_id] = new_suppress
+				sct_suppress_tick[atk_f_id] = tick
+				save.f_sct_suppress_val = sct_suppress_val
+				save.f_sct_suppress_tick = sct_suppress_tick
+				print(string.format("[InsectLimit] ATK→SUPPRESS | faction=%s | +500 | %d→%d | scoutCD=%.0ft",
+					tostring(atk_f_id), cur_suppress, new_suppress, 700.0 + new_suppress))
 				local f_atk_ticks = save.f_attack_ticks or {}
 				f_atk_ticks[atk_f_id] = tick -- 精准上 CD
 				save.f_attack_ticks = f_atk_ticks
