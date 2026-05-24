@@ -1,5 +1,5 @@
 -- InsectLimit Mod - Performance & Intelligent Combat Fixes
--- Version: 2.9 (CD-Gated Cadence + Distance-Decay + Dynamic Scout Suppress)
+-- Version: 2.9.1 (CD-Gated Cadence + Distance-Decay + Dynamic Scout Suppress)
 -- Author: 镜影若滴
 
 local package = ...
@@ -97,14 +97,14 @@ function MapMsg.OnTick()
 		local ed = bugs.extra_data
 		if not ed.heartbeat_active and not ed.heartbeat_started then
 			ed.heartbeat_active = true
-			print("[InsectLimit] SYSTEM STARTUP -> v2.9 DynSuppress Deployed")
+			print("[InsectLimit] SYSTEM STARTUP -> v2.9.1 DynSuppress Deployed")
 			Map.Delay("DiagnosticHeartbeat", 5)
 		end
 	end
 end
 
 function package:init()
-print("[InsectLimit] Initializing v2.9 - CD-Gated + Dist-Decay + DynSuppress...")
+print("[InsectLimit] Initializing v2.9.1 - CD-Gated + Dist-Decay + DynSuppress...")
 
 	local components = data.components
 
@@ -271,7 +271,7 @@ print("[InsectLimit] Initializing v2.9 - CD-Gated + Dist-Decay + DynSuppress..."
 	end
 
 	-- 大型蜂巢行为 (深度逻辑解耦：完全分离进攻与侦察的目标、ID与账本)
-	-- v2.9: CD门控预扫描——仿原版机制，CD期间不推进extra_spawned计数器
+	-- v2.9.1: CD门控预扫描——仿原版机制，CD期间不推进extra_spawned计数器
 	-- 原版全局CD未到时extra_spawned不递增；本模组改为按玩家势力独立判定
 	components.c_bug_spawner_large.on_update = function(self, comp, cause)
 		if comp.faction.is_player_controlled then return comp:SetStateSleep(10000 + math.random(-10, 10)) end
@@ -289,7 +289,7 @@ print("[InsectLimit] Initializing v2.9 - CD-Gated + Dist-Decay + DynSuppress..."
 		-- 侦察CD = 700 + 侦察抑制值（进攻越频繁抑制越高，随时间衰减）
 		local f_atk_ticks_pre = save.f_attack_ticks or {}
 		local f_sct_ticks_pre = save.f_scout_ticks or {}
-		-- 【侦察抑制值】：进攻成功+500，每tick衰减1，上限1400（侦察CD最大2100）
+		-- 【侦察抑制值】：进攻成功+750，每tick衰减1，上限1400（侦察CD最大2100）
 		local sct_suppress_val = save.f_sct_suppress_val or {}
 		local sct_suppress_tick = save.f_sct_suppress_tick or {}
 		local function GetSctSuppress(f_id)
@@ -418,15 +418,15 @@ print("[InsectLimit] Initializing v2.9 - CD-Gated + Dist-Decay + DynSuppress..."
 				end
 				if not IsBugActiveSeason() and rnd > 0.1 then return comp:SetStateSleep(math.random(1990, 2010)) end
 				ed_hive.extra_spawned = 0
-				-- 【侦察抑制值更新】：进攻成功追加500抑制（上限1400），随时间自然衰减
+				-- 【侦察抑制值更新】：进攻成功追加750抑制（上限1400），随时间自然衰减
 				-- 进攻越频繁→抑制越高→侦察扩张越消极，实现自调节负反馈
 				local cur_suppress = GetSctSuppress(atk_f_id)
-				local new_suppress = math.min(1400, cur_suppress + 500)
+				local new_suppress = math.min(1400, cur_suppress + 750)
 				sct_suppress_val[atk_f_id] = new_suppress
 				sct_suppress_tick[atk_f_id] = tick
 				save.f_sct_suppress_val = sct_suppress_val
 				save.f_sct_suppress_tick = sct_suppress_tick
-				print(string.format("[InsectLimit] ATK→SUPPRESS | faction=%s | +500 | %d→%d | scoutCD=%.0ft",
+				print(string.format("[InsectLimit] ATK→SUPPRESS | faction=%s | +750 | %d→%d | scoutCD=%.0ft",
 					tostring(atk_f_id), cur_suppress, new_suppress, 700.0 + new_suppress))
 				local f_atk_ticks = save.f_attack_ticks or {}
 				f_atk_ticks[atk_f_id] = tick -- 精准上 CD

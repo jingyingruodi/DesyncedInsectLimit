@@ -2,9 +2,9 @@
 	"id": "InsectLimit",
 	"name": "虫群单位上限修改 (Insect Limit)",
 	"author": "镜影若滴",
-	"version_name": "2.9",
-	"version_code": 100,
-	"description": "v2.9新增CD门控预扫描；距离衰减成功率(100格→100%,250格→30%)；侦察抑制值(进攻频繁→侦察消极，自动负反馈调节)。并回合多人优化，任然每玩家独立全局CD。",
+	"version_name": "2.9.1",
+	"version_code": 101,
+	"description": "v2.9.1新增CD门控预扫描；距离衰减成功率(100格→100%,250格→30%)；侦察抑制值(进攻频繁→侦察消极，自动负反馈调节)。并回合多人优化，任然每玩家独立全局CD。",
 	"packages": {
 		"InsectLimitAmin": {
 			"name": "InsectLimitAmin",
