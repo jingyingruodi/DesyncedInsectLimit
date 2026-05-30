@@ -11,7 +11,7 @@
 ## 📖 核心改动与优化 (相较于原版)
 
 ### 该模组对原版虫群行为进行了深度重构和系统性的优化
-解决超远距离跨图寻路、无脑堵路、后期波次规模失控、多人游戏中虫群长期停摆、失去攻击性、异常聚集等问题。
+解决超远距离跨图寻路、无脑堵路、多人游戏中虫群长期停摆、失去攻击性、异常聚集等问题。
 
 ### 1. 进攻距离截断与寻路优化(重构)
 - **拦截“千里奔袭”行为**：修复了原版虫群AI强制锁定玩家主基地作为目标的缺陷。在原版中，若玩家单位在虫巢附近出现，即便主基地远在数千格之外，虫群也会尝试跨越全图发起进攻，造成极高的路径计算开销。
@@ -26,7 +26,6 @@
 ### 3. 归巢逻辑增强与性能优化改善
 - **归巢灵敏度优化**：进一步优化了单位在战后的归巢触发逻辑，引入了更智能的卡死自愈逻辑，轻微改善了复杂地形下的路径卡顿。
 - **筑巢并发限制**：限制了每tick只能有5个虫群单位进行筑巢行为。降低并发压力。
-- **浮动CD优化并发**：增加虫巢决策行为CD的上下浮动值。降低并发并带来轻微的混乱随机的效果。
 
 ### 4. 多人环境动态适配
 - **虫群行动CD重构**：将虫巢进攻与侦察的全局CD替换为对**每个玩家势力单独一个全局CD**。同时也避免多人环境下部分玩家长期不会被虫群袭击或者被过于频繁的被袭击的问题。
@@ -72,7 +71,7 @@ Dedicated servers using the **Swarming** swarm hostility setting are recommended
 
 ### This mod performs a deep reconstruction and systematic optimization of vanilla swarm behavior
 
-It resolves issues such as ultra long-distance cross-map pathfinding, mindless traffic blocking, uncontrolled late-game wave scaling, swarms becoming inactive for long periods in multiplayer, losing aggression, and abnormal clustering.
+It resolves issues such as ultra long-distance cross-map pathfinding, mindless traffic blocking, swarms becoming inactive for long periods in multiplayer, losing aggression, and abnormal clustering.
 
 ### 1. Attack Range Limiting & Pathfinding Optimization (Reworked)
 
@@ -90,7 +89,6 @@ It resolves issues such as ultra long-distance cross-map pathfinding, mindless t
 
 - **Improved return sensitivity**: Further optimizes post-combat return-to-hive behavior and introduces smarter self-recovery logic for stuck units, slightly improving path congestion in complex terrain.
 - **Nest-building concurrency limit**: Limits nest-building actions to a maximum of 5 swarm units per tick, reducing burst load.
-- **Floating cooldown concurrency optimization**: Adds random variance to hive decision cooldown timers, reducing synchronized spikes while creating a slight chaotic/randomized effect.
 
 ### 4. Dynamic Multiplayer Scaling
 

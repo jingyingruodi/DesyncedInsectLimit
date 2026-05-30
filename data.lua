@@ -1,5 +1,5 @@
 -- InsectLimit Mod - Performance & Intelligent Combat Fixes
--- Version: 2.9.2 (CD-Gated Cadence + Distance-Decay + Dynamic Scout Suppress)
+-- Version: 2.9.3 (CD-Gated Cadence + Distance-Decay + Dynamic Scout Suppress)
 -- Author: 镜影若滴
 
 local package = ...
@@ -97,14 +97,14 @@ function MapMsg.OnTick()
 		local ed = bugs.extra_data
 		if not ed.heartbeat_active and not ed.heartbeat_started then
 			ed.heartbeat_active = true
-			print("[InsectLimit] SYSTEM STARTUP -> v2.9.2 DynSuppress Deployed")
+			print("[InsectLimit] SYSTEM STARTUP -> v2.9.3 DynSuppress Deployed")
 			Map.Delay("DiagnosticHeartbeat", 5)
 		end
 	end
 end
 
 function package:init()
-print("[InsectLimit] Initializing v2.9.2 - CD-Gated + Dist-Decay + DynSuppress...")
+print("[InsectLimit] Initializing v2.9.3 - CD-Gated + Dist-Decay + DynSuppress...")
 
 	local components = data.components
 
@@ -166,10 +166,6 @@ print("[InsectLimit] Initializing v2.9.2 - CD-Gated + Dist-Decay + DynSuppress..
 		local ed = comp.extra_data
 		if not ed.bugs then ed.bugs, ed.spawned, ed.lvl, ed.extra_spawned = {}, Map.GetTick() - 901, 0, 0 end
 		for i=#ed.bugs,1,-1 do if not ed.bugs[i].exists then table.remove(ed.bugs, i) end end
-
-		for i=#ed.bugs,1,-1 do
-            if not ed.bugs[i].exists then table.remove(ed.bugs, i) end
-        end
 
         -------------------------------------------------
         -- 第一优先级：已有驻军立即反击
@@ -284,6 +280,9 @@ print("[InsectLimit] Initializing v2.9.2 - CD-Gated + Dist-Decay + DynSuppress..
 		local tick, save = Map.GetTick(), Map.GetSave()
 		local nest_ready = (tick - (save.last_nest_tick or 0)) > (1000 + math.random(-10, 10))
 
+		-- 一次性获取势力列表，预扫描与决策循环复用，避免重复C调用
+		local factions_all = Map.GetFactions()
+
 		-- 【CD门控预扫描】：若所有玩家势力均在CD中且无扩张需求，
 		-- 则仿原版行为不递增extra_spawned，休眠至最近CD到期
 		-- 侦察CD = 700 + 侦察抑制值（进攻越频繁抑制越高，随时间衰减）
@@ -300,8 +299,7 @@ print("[InsectLimit] Initializing v2.9.2 - CD-Gated + Dist-Decay + DynSuppress..
 		local min_cd_remain = 999999
 
 		if not any_ready then
-			local factions_pre = Map.GetFactions()
-			for _, faction in ipairs(factions_pre) do
+			for _, faction in ipairs(factions_all) do
 				if faction and faction.is_player_controlled and faction.num_entities > 0
 				   and bugs_f:GetTrust(faction) == "ENEMY" then
 					local f_id = faction.id
@@ -332,8 +330,7 @@ print("[InsectLimit] Initializing v2.9.2 - CD-Gated + Dist-Decay + DynSuppress..
 			local atk_target, atk_f_id, atk_dist = nil, nil, 9999999
 			local sct_target, sct_f_id = nil, nil
 
-            local factions = Map.GetFactions()
-            local f_count = #factions
+            local f_count = #factions_all  -- 复用预扫描时的势力列表
 
             if f_count > 0 then
 				local f_atk_ticks = save.f_attack_ticks or {}
@@ -344,7 +341,7 @@ print("[InsectLimit] Initializing v2.9.2 - CD-Gated + Dist-Decay + DynSuppress..
 
                 for i = 1, f_count do
                     local f_idx = forward and ((f_start + i - 2) % f_count + 1) or ((f_start - i + f_count) % f_count + 1)
-                    local faction = factions[f_idx]
+                    local faction = factions_all[f_idx]
 
 					if faction and faction.is_player_controlled and faction.num_entities > 0 and bugs_f:GetTrust(faction) == "ENEMY" then
 						local f_id = faction.id
@@ -400,7 +397,7 @@ print("[InsectLimit] Initializing v2.9.2 - CD-Gated + Dist-Decay + DynSuppress..
                 end
 
 				if not any_action_possible and not nest_ready then
-					return comp:SetStateSleep(300 + math.random(-10, 10))
+					return comp:SetStateSleep(math.random(300, 600))
 				end
             end
 
@@ -416,7 +413,7 @@ print("[InsectLimit] Initializing v2.9.2 - CD-Gated + Dist-Decay + DynSuppress..
 						--print(string.format("[InsectLimit] ATK-DIST-FAIL | dist=%.0f | prob=%.2f roll=%.2f | skipped",
 						--	atk_dist, atk_prob, roll))
 						ed_hive.extra_spawned = 0
-						return comp:SetStateSleep(math.random(290, 310))
+						return comp:SetStateSleep(math.random(300, 600))
 					end
 					--print(string.format("[InsectLimit] ATK-DIST-PASS | dist=%.0f | prob=%.2f roll=%.2f | proceeding",
 					--	atk_dist, atk_prob, roll))
@@ -460,7 +457,7 @@ print("[InsectLimit] Initializing v2.9.2 - CD-Gated + Dist-Decay + DynSuppress..
 				if not found then save.last_nest_tick = tick ed_hive.extra_spawned = 0 Map.Defer(function() if comp.exists then Map.CreateEntity(bugs_f, "f_bug_hive"):Place(comp.owner.location) end end) return comp:SetStateSleep(math.random(990, 1010)) end
 			end
 		end
-		return comp:SetStateSleep(math.random(290, 310))
+		return comp:SetStateSleep(math.random(300, 600))
 	end
 
 	-- 归巢逻辑：全量随机化
